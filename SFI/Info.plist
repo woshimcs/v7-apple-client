@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- MODIFIED-BY-V7: 品牌化 App 显示名为 Veylo（覆盖 PRODUCT_NAME 默认） -->
+	<key>CFBundleDisplayName</key>
+	<string>Veylo</string>
 	<key>BasePackageIdentifier</key>
 	<string>$(BASE_PACKAGE_IDENTIFIER)</string>
 	<key>AppGroupIdentifier</key>
@@ -47,6 +50,8 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>sing-box</string>
+				<!-- MODIFIED-BY-V7: 追加品牌 deep-link scheme veylo://（保留 sing-box:// 不破坏上游导入处理） -->
+				<string>veylo</string>
 			</array>
 		</dict>
 	</array>
