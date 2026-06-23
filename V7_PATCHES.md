@@ -8,7 +8,12 @@
 
 | # | upstream 文件 | 位置 / 符号 | 改动原因 | 日期 | PR |
 |---|---|---|---|---|----|
-| — | （暂无）| — | fork 初始化仅新增 V7 文档，未改任何上游文件 | 2026-06-23 | docs/fork-bootstrap |
+| 1 | `sing-box.xcodeproj/project.pbxproj` | `BASE_PACKAGE_IDENTIFIER`（Debug+Release，2 处） | `io.nekohasekai.sfavt` → `link.veylo.ios`，品牌化 Bundle ID 基址（级联 app/extension/app group/iCloud）。**注**：pbxproj 格式无法安全携带 `// MODIFIED-BY-V7` 注释，故仅在此登记。 | 2026-06-23 | feat/branding-veylo |
+| 2 | `SFI/Info.plist` | 顶层 `CFBundleDisplayName` | 新增 = `Veylo`，主屏显示名（XML 注释已标 MODIFIED-BY-V7）。 | 2026-06-23 | feat/branding-veylo |
+| 3 | `SFI/Info.plist` | `CFBundleURLTypes[0].CFBundleURLSchemes` | 追加品牌 deep-link scheme `veylo://`，保留 `sing-box://` 不破坏上游导入（XML 注释已标）。 | 2026-06-23 | feat/branding-veylo |
+
+> 新增 V7 自有文件（不动上游，不入上表）：`V7/V7About.swift`（GPL 关于页草稿）。
+> **Mac 落地**：`V7/V7About.swift` 需在 Xcode 加入 SFI target 的 Compile Sources，并在设置页加「关于 Veylo」入口。
 
 ## 待办（计划中的侵入点，落地时回填上表）
 
