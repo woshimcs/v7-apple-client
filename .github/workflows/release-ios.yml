@@ -1,0 +1,159 @@
+# =============================================================================
+# release-ios.yml — Veylo iOS 发版（archive → TestFlight → 回填后端）
+# =============================================================================
+# 设计对齐 agent-charter / VERSION_MANAGEMENT：
+#   - release 签名 + CI 注入版本号（禁止硬编码 1.0.0）；
+#   - 公证/上传走 App Store Connect API Key(.p8)，不用 Apple ID 密码；
+#   - 本仓 public → macOS runner 免费，不烧私有额度；
+#   - 发布后回填后端 POST /api/v1/admin/releases（platform=ios，download_url=TestFlight 链接）。
+#
+# 复用上游 Makefile 既有通路：archive_ios（xcodebuild archive）+ Upload.plist（method=app-store）。
+# Libbox 由 SwiftPM 解析，无需手动拉取。
+#
+# ⚠️ 未在非 Mac 环境验证；首次跑前需在 Mac/Actions 上核对 scheme/证书/Provisioning。
+# 前置 Secrets 见 docs/PREREQUISITES.md §5。
+# =============================================================================
+name: release-ios
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "MARKETING_VERSION，如 1.0.0（不带 v 前缀）"
+        required: true
+      build_number:
+        description: "CURRENT_PROJECT_VERSION（留空=用 run_number）"
+        required: false
+        default: ""
+      testflight_url:
+        description: "TestFlight 公测链接（用于回填下载页；留空则跳过回填）"
+        required: false
+        default: ""
+      channel:
+        description: "回填渠道 stable|beta"
+        required: false
+        default: "beta"
+
+concurrency:
+  group: release-ios
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ github.event.inputs.version }}
+      BUILD_NUMBER: ${{ github.event.inputs.build_number != '' && github.event.inputs.build_number || github.run_number }}
+      KEYCHAIN: ${{ runner.temp }}/v7-signing.keychain-db
+      API_KEY_DIR: ${{ runner.temp }}/appstore_private_keys
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app || sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Install xcbeautify
+        run: brew install xcbeautify || true
+
+      # ---- 签名材料 ----------------------------------------------------------
+      - name: Import App Store Connect API key (.p8)
+        env:
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_KEY_P8_B64: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$API_KEY_DIR"
+          echo "$API_KEY_P8_B64" | base64 --decode > "$API_KEY_DIR/AuthKey_${API_KEY_ID}.p8"
+          echo "API_KEY_PATH=$API_KEY_DIR/AuthKey_${API_KEY_ID}.p8" >> "$GITHUB_ENV"
+
+      - name: Import distribution certificate
+        env:
+          CERT_P12_B64: ${{ secrets.IOS_DIST_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="${{ runner.temp }}/dist.p12"
+          echo "$CERT_P12_B64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN" >/dev/null
+
+      - name: Install provisioning profiles
+        env:
+          APP_PROFILE_B64: ${{ secrets.IOS_PROVISION_PROFILE }}
+          EXT_PROFILE_B64: ${{ secrets.IOS_EXT_PROVISION_PROFILE }}
+        run: |
+          set -euo pipefail
+          PP_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PP_DIR"
+          if [ -n "${APP_PROFILE_B64:-}" ]; then echo "$APP_PROFILE_B64" | base64 --decode > "$PP_DIR/veylo_app.mobileprovision"; fi
+          if [ -n "${EXT_PROFILE_B64:-}" ]; then echo "$EXT_PROFILE_B64" | base64 --decode > "$PP_DIR/veylo_ext.mobileprovision"; fi
+
+      # ---- 构建 + 归档 -------------------------------------------------------
+      - name: Archive (SFI, Release, signed)
+        env:
+          V7_API_BASE: ${{ secrets.V7_API_BASE }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          rm -rf build/SFI.xcarchive
+          xcodebuild archive \
+            -scheme SFI \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/SFI.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$API_KEY_ID" \
+            -authenticationKeyIssuerID "$API_ISSUER" \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            V7_API_BASE="$V7_API_BASE" \
+            | xcbeautify
+
+      - name: Export + upload to TestFlight
+        env:
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/SFI.xcarchive \
+            -exportOptionsPlist SFI/Upload.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$API_KEY_ID" \
+            -authenticationKeyIssuerID "$API_ISSUER" \
+            | xcbeautify
+
+      # ---- 回填后端发布记录 ---------------------------------------------------
+      - name: Backfill /admin/releases
+        if: ${{ github.event.inputs.testflight_url != '' }}
+        env:
+          API_BASE: ${{ secrets.V7_API_BASE }}
+          ADMIN_USER: ${{ secrets.V7_ADMIN_USER }}
+          ADMIN_PASS: ${{ secrets.V7_ADMIN_PASS }}
+          TF_URL: ${{ github.event.inputs.testflight_url }}
+          CHANNEL: ${{ github.event.inputs.channel }}
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -fsS -X POST "$API_BASE/api/v1/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\",\"device_name\":\"ci-ios-release\"}" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["token"])')
+          curl -fsS -X POST "$API_BASE/api/v1/admin/releases" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "{\"platform\":\"ios\",\"version\":\"$VERSION\",\"version_code\":$BUILD_NUMBER,\"channel\":\"$CHANNEL\",\"download_url\":\"$TF_URL\",\"release_notes\":\"iOS $VERSION (build $BUILD_NUMBER) via TestFlight\"}"
+          echo "backfilled release ios $VERSION ($BUILD_NUMBER)"
+
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain "$KEYCHAIN" || true
