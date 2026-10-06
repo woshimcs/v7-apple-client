@@ -99,7 +99,8 @@ struct ReportFileContentView: View {
                 try? FileManager.default.removeItem(at: strippedURL.appendingPathComponent(ReportArchive.configFileName))
             }
             var error: NSError?
-            LibboxCreateZipArchive(strippedURL.path, tempURL.path, &error)
+            // MODIFIED-BY-V7: sing-box v1.14.0 added an encrypt flag. TestFlight reports stay unencrypted.
+            LibboxCreateZipArchive(strippedURL.path, tempURL.path, false, &error)
             try? FileManager.default.removeItem(at: strippedURL)
             if let error { throw error }
             return tempURL

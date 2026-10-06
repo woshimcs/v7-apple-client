@@ -22,6 +22,7 @@
 | 12 | `Library/Database/Profile+RW.swift` | `writeAsync` | 改为 `public`，让 ApplicationLibrary 写入订阅配置。 | 2026-10-06 | feat/ios-testflight |
 | 13 | `sing-box.xcodeproj/project.pbxproj` | Team、SFI 显示名、Extension bundle、嵌入扩展 | Team `4534A24396`；SFI 显示名 Veylo；Extension 为 `.tunnel`；SFI 不再嵌入 Widget / File Provider / Intents（门户没有这几个 App ID）。 | 2026-10-06 | feat/ios-testflight |
 | 14 | `Library/Network/ExtensionPlatformInterface.swift` | `cancelNotification` / `usePlatformBridge` / `createBridge` | 补上 sing-box v1.14.0 的平台接口。iOS 上 bridge 直接拒绝，通知取消走系统通知中心。 | 2026-10-06 | feat/ios-testflight |
+| 15 | `ApplicationLibrary/Views/Tools/ReportShared.swift` | `LibboxCreateZipArchive` | v1.14.0 多了 `encrypt` 参数。测试包报告不加密，传 `false`。 | 2026-10-06 | feat/ios-testflight |
 
 > 新增 V7 自有文件（不动上游，不入上表）：
 > - `V7/V7About.swift`（GPL 关于页草稿，PR `feat/branding-veylo`）。
