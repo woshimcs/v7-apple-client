@@ -14,7 +14,7 @@
 | 4 | `SFI/Assets.xcassets/AppIcon.appiconset/*.png`（19 个尺寸） | 全部 PNG | 替换为 **Veylo 品牌图标**（蓝色 V + swoosh，白底，不透明无 alpha）。源自桌面端 `v7-win-pc/src-tauri/icons/ios/AppIcon-512@2x.png`（1024 官方图标）按各尺寸重采样。`Contents.json` 结构不变，仅替换位图，故无需改 JSON。**注**：二进制无法携带注释，仅此登记。 | 2026-06-23 | feat/branding-veylo |
 | 5 | `MacLibrary/Assets.xcassets/AppIcon.appiconset/*.png`（10 个尺寸） | 全部 PNG | 同 #4 来源，铺到 macOS（SFM）图标集，三端图标统一。`Contents.json` 不变。 | 2026-06-23 | feat/branding-veylo |
 | 6 | `WidgetExtension/Assets.xcassets/AppIcon.appiconset/`（`Contents.json` + 新增 `AppIcon-1024.png`） | universal/ios 1024 槽 | 单尺寸图标集补 1024 位图并在 `Contents.json` 的默认槽填 `filename`（dark/tinted 槽留空由 Xcode 派生）。源同 #4。 | 2026-06-23 | feat/branding-veylo |
-| 7 | `SFI/Application.swift` | `Application.body` | 未登录显示 `V7LoginView`，已登录进上游 `MainView`，并拉 session。 | 2026-10-06 | feat/ios-testflight |
+| 7 | `SFI/Application.swift` | `Application.body` | 未登录显示 `V7LoginView`，已登录进 `V7HomeView`（对齐安卓首页），并拉 session。 | 2026-10-06 | feat/ios-testflight |
 | 8 | `SFI/Info.plist` | `V7_API_BASE` | 注入 `$(V7_API_BASE)`，工程默认 `https://veylo.link`。 | 2026-10-06 | feat/ios-testflight |
 | 9 | `SFI/SFI.entitlements`、`Extension/Extension.entitlements` | NE + App Group | 只留 `packet-tunnel-provider` 与 `$(APP_GROUP_IDENTIFIER)`（`group.link.veylo.ios`）。去掉 iCloud / multicast，否则描述文件签不过。 | 2026-10-06 | feat/ios-testflight |
 | 10 | `Library/Shared/AppConfiguration.swift` | `extensionBundleID` | iOS 用 `link.veylo.ios.tunnel`，与门户 App ID 一致。 | 2026-10-06 | feat/ios-testflight |
@@ -29,7 +29,7 @@
 > - `ApplicationLibrary/V7/`（登录、session、1.12+ 配置、profile 桥）。由同步目录编进 ApplicationLibrary。
 > - `.github/workflows/release-ios.yml`（TestFlight CI，`macos-26` + Xcode 26，Libbox 取 sing-box v1.14.0）。
 >
-> 登录闸门、`V7_API_BASE`、entitlements 已落在上表 #7–#13。连接仍用上游按钮；登录成功后会把第一条可导出订阅写成本地 profile。
+> 登录闸门、`V7_API_BASE`、entitlements 已落在上表 #7–#13。登录后是 Veylo 首页（线路、连接、断开、我的），不再进上游 `MainView`。选中的线路写入 selector `default`。
 
 ## 待办（计划中的侵入点，落地时回填上表）
 

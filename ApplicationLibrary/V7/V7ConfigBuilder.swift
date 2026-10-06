@@ -54,10 +54,36 @@ public enum V7ConfigBuilder {
         return obj
     }
 
+    /// 可点选的线路。跳过 direct / selector / urltest，名字用出站 tag（与后端节点名一致）。
+    public struct Line: Identifiable, Hashable {
+        public let tag: String
+        public let type: String
+        public var id: String { tag }
+        public init(tag: String, type: String) {
+            self.tag = tag
+            self.type = type
+        }
+    }
+
+    public static func lines(in export: [String: Any]) -> [Line] {
+        let skip: Set<String> = ["direct", "block", "dns", "selector", "urltest"]
+        guard let outbounds = export["outbounds"] as? [[String: Any]] else { return [] }
+        return outbounds.compactMap { outbound in
+            let type = (outbound["type"] as? String) ?? ""
+            let tag = (outbound["tag"] as? String) ?? ""
+            guard !tag.isEmpty, !skip.contains(type) else { return nil }
+            return Line(tag: tag, type: type)
+        }
+    }
+
     /// 包成完整配置并返回 JSON 字符串（pretty）。
-    public static func build(export: [String: Any], bypass: BypassRules) throws -> String {
-        guard let outbounds = export["outbounds"] as? [[String: Any]], !outbounds.isEmpty else {
+    /// `selectedTag` 写进 selector 的 `default`，连接时走用户选的那条，而不是导出里的第一条。
+    public static func build(export: [String: Any], bypass: BypassRules, selectedTag: String? = nil) throws -> String {
+        guard var outbounds = export["outbounds"] as? [[String: Any]], !outbounds.isEmpty else {
             throw BuildError.noOutbounds
+        }
+        if let selectedTag {
+            outbounds = pinSelector(outbounds, defaultTag: selectedTag)
         }
 
         var cfg = export
@@ -115,9 +141,9 @@ public enum V7ConfigBuilder {
     }
 
     /// 一步到位：原始导出字符串 + proxy_config → 完整配置字符串。
-    public static func buildFrom(rawExport: String, proxyConfig: [String: Any]?) throws -> String {
+    public static func buildFrom(rawExport: String, proxyConfig: [String: Any]?, selectedTag: String? = nil) throws -> String {
         let export = try parseExport(rawExport)
-        return try build(export: export, bypass: BypassRules.from(proxyConfig))
+        return try build(export: export, bypass: BypassRules.from(proxyConfig), selectedTag: selectedTag)
     }
 
     // MARK: - helpers
@@ -129,6 +155,19 @@ public enum V7ConfigBuilder {
             return group["tag"] as? String
         }
         return outbounds.first { !skip.contains(($0["type"] as? String) ?? "") }?["tag"] as? String
+    }
+
+    /// 把 selector（后端 tag=`proxy`）的 default 改成用户选的节点。节点不在组里则不动。
+    private static func pinSelector(_ outbounds: [[String: Any]], defaultTag: String) -> [[String: Any]] {
+        outbounds.map { outbound in
+            guard (outbound["type"] as? String) == "selector",
+                  let members = outbound["outbounds"] as? [String],
+                  members.contains(defaultTag)
+            else { return outbound }
+            var copy = outbound
+            copy["default"] = defaultTag
+            return copy
+        }
     }
 
     private static func ensureBaseOutbounds(_ outbounds: [[String: Any]]) -> [[String: Any]] {

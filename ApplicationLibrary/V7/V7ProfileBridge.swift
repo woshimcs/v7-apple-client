@@ -27,24 +27,30 @@ public enum V7ProfileBridge {
 
     private static let profileName = "Veylo"
 
-    /// 用某条订阅的 singbox 导出链接同步出一份本地 profile（不启动）。返回 profile id。
-    @discardableResult
-    public static func syncProfile(
-        from singboxExportURL: String,
-        proxyConfig: [String: Any]?
-    ) async throws -> Int64 {
+    /// 拉订阅导出原文（token 在 URL 里）。
+    public static func downloadExport(_ singboxExportURL: String) async throws -> String {
         guard let url = URL(string: singboxExportURL) else { throw BridgeError.invalidExportURL }
-
-        // 1) 拉裸导出（token 即凭证，无需 Bearer）
         var req = URLRequest(url: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, _) = try await URLSession.shared.data(for: req)
         guard let raw = String(data: data, encoding: .utf8), !raw.isEmpty else {
             throw BridgeError.emptyExport
         }
+        return raw
+    }
 
-        // 2) 包成完整配置
-        let content = try V7ConfigBuilder.buildFrom(rawExport: raw, proxyConfig: proxyConfig)
+    /// 用某条订阅的 singbox 导出链接同步出一份本地 profile（不启动）。返回 profile id。
+    @discardableResult
+    public static func syncProfile(
+        from singboxExportURL: String,
+        proxyConfig: [String: Any]?,
+        selectedTag: String? = nil
+    ) async throws -> Int64 {
+        // 1) 拉裸导出（token 即凭证，无需 Bearer）
+        let raw = try await downloadExport(singboxExportURL)
+
+        // 2) 包成完整配置。selectedTag 决定 selector 的 default。
+        let content = try V7ConfigBuilder.buildFrom(rawExport: raw, proxyConfig: proxyConfig, selectedTag: selectedTag)
 
         // 3) 校验（off main thread）
         try await Task.detached(priority: .userInitiated) {
@@ -75,8 +81,8 @@ public enum V7ProfileBridge {
     }
 
     /// 同步 + 启动 NE。
-    public static func syncAndStart(from singboxExportURL: String, proxyConfig: [String: Any]?) async throws {
-        _ = try await syncProfile(from: singboxExportURL, proxyConfig: proxyConfig)
+    public static func syncAndStart(from singboxExportURL: String, proxyConfig: [String: Any]?, selectedTag: String? = nil) async throws {
+        _ = try await syncProfile(from: singboxExportURL, proxyConfig: proxyConfig, selectedTag: selectedTag)
         try await ensureInstalledAndStart()
     }
 

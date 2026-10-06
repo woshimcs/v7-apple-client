@@ -64,8 +64,6 @@ public struct V7LoginView: View {
             .padding(.horizontal)
 
             Spacer()
-            Text("基于开源 sing-box，遵循 GPL-3.0")
-                .font(.caption2).foregroundStyle(.secondary)
         }
         .padding()
     }
