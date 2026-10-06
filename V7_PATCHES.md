@@ -21,11 +21,12 @@
 | 11 | `Library/Shared/Variant.swift` | `applicationName`（iOS） | VPN 配置显示名改为 Veylo。 | 2026-10-06 | feat/ios-testflight |
 | 12 | `Library/Database/Profile+RW.swift` | `writeAsync` | 改为 `public`，让 ApplicationLibrary 写入订阅配置。 | 2026-10-06 | feat/ios-testflight |
 | 13 | `sing-box.xcodeproj/project.pbxproj` | Team、SFI 显示名、Extension bundle、嵌入扩展 | Team `4534A24396`；SFI 显示名 Veylo；Extension 为 `.tunnel`；SFI 不再嵌入 Widget / File Provider / Intents（门户没有这几个 App ID）。 | 2026-10-06 | feat/ios-testflight |
+| 14 | `Library/Network/ExtensionPlatformInterface.swift` | `cancelNotification` / `usePlatformBridge` / `createBridge` | 补上 sing-box v1.14.0 的平台接口。iOS 上 bridge 直接拒绝，通知取消走系统通知中心。 | 2026-10-06 | feat/ios-testflight |
 
 > 新增 V7 自有文件（不动上游，不入上表）：
 > - `V7/V7About.swift`（GPL 关于页草稿，PR `feat/branding-veylo`）。
 > - `ApplicationLibrary/V7/`（登录、session、1.12+ 配置、profile 桥）。由同步目录编进 ApplicationLibrary。
-> - `.github/workflows/release-ios.yml`（TestFlight CI，`macos-15` + Xcode 16.4，Libbox 取 sing-box v1.14.0）。
+> - `.github/workflows/release-ios.yml`（TestFlight CI，`macos-26` + Xcode 26，Libbox 取 sing-box v1.14.0）。
 >
 > 登录闸门、`V7_API_BASE`、entitlements 已落在上表 #7–#13。连接仍用上游按钮；登录成功后会把第一条可导出订阅写成本地 profile。
 
