@@ -485,6 +485,9 @@ public class CommandClient: ObservableObject {
             }
         }
 
+        // MODIFIED-BY-V7: veylo-core（sing-box-lx）的命令协议多了 DNS 事件。首页不用它，空实现即可。
+        func writeDNSQuery(_ query: LibboxDnsQuery?) {}
+
         func write(_ events: LibboxConnectionEvents?) {
             guard let events else {
                 return
