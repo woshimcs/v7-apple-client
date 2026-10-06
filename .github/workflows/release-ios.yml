@@ -1,5 +1,5 @@
 # Veylo iOS → TestFlight.
-# Libbox 用 sing-box v1.14.0（与这份 SFI 壳一致）。导出格式对齐现网 1.12+。
+# Libbox 用 Veylo 隧道核：sing-box-lx（官方 sing-box + xhttp）。导出格式对齐现网 1.12+。
 # 直接在本仓跑需要 APPLE_API_* secrets。桌面仓 v7-win-pc 已有这三把钥匙，
 # 用 workflow_call 把它们传进来，避免把密钥再复制一份。
 name: release-ios
@@ -10,7 +10,7 @@ on:
       version:
         description: "MARKETING_VERSION，与 V7Version.marketing 一致"
         required: false
-        default: "1.0.1"
+        default: "1.0.2"
       git_ref:
         description: "要编的 v7-apple-client ref，留空=当前提交"
         required: false
@@ -20,7 +20,7 @@ on:
       version:
         type: string
         required: false
-        default: "1.0.1"
+        default: "1.0.2"
       git_ref:
         type: string
         required: true
@@ -59,7 +59,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24.x"
+          go-version: "1.25.5"
 
       - name: Build Libbox.xcframework (sing-box v1.14.0, iOS)
         run: |
@@ -68,7 +68,7 @@ jobs:
           go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
           export PATH="$(go env GOPATH)/bin:$PATH"
           gomobile init
-          git clone --depth 1 --branch v1.14.0 https://github.com/SagerNet/sing-box.git sing-box-src
+          git clone --depth 1 --branch veylo-1.0.0 https://github.com/woshimcs/veylo-core.git sing-box-src
           (
             cd sing-box-src
             go run ./cmd/internal/build_libbox -target apple -platform ios

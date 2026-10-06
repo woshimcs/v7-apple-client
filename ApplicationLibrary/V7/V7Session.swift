@@ -38,6 +38,7 @@ public struct V7VpnAccess: Decodable {
 
 public struct V7ExportLinks: Decodable {
     public let singbox: String?
+    public let xray: String?
 }
 
 public struct V7Subscription: Decodable, Identifiable {

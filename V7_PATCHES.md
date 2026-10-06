@@ -27,11 +27,10 @@
 > 新增 V7 自有文件（不动上游，不入上表）：
 > - `V7/V7About.swift`（GPL 关于页草稿，PR `feat/branding-veylo`）。
 > - `ApplicationLibrary/V7/`（登录、session、1.12+ 配置、profile 桥）。由同步目录编进 ApplicationLibrary。
-> - `.github/workflows/release-ios.yml`（TestFlight CI，`macos-26` + Xcode 26，Libbox 取 sing-box v1.14.0）。
+> - `.github/workflows/release-ios.yml`（TestFlight CI，`macos-26` + Xcode 26，Libbox 取 `woshimcs/veylo-core` 标签 `veylo-1.0.0`）。
 >
 > 登录闸门、`V7_API_BASE`、entitlements 已落在上表 #7–#13。登录后是 Veylo 壳（首页 / 工具 / 我的），不再进上游 `MainView`。
-> 1.0.1：全部有效订阅的 sing-box 导出 + `/lines` 地区；`refresh_nodes` 会重拉；自动切换默认开（urltest），关掉则钉住选中节点。版本号在 `V7Version.marketing` 与 SFI `MARKETING_VERSION`。
-> 线路带 `cores` / `best_core`。sing-box 能跑就走 sing-box 隧道；验证结果只有 Xray 或 mihomo 的线路会显示「需要该内核」，连接会被拒绝。自动切换不会把这些线路编进组。iPhone 扩展里不能再塞第二个 Go 内核。
+> 1.0.2：隧道核是 Veylo 自有核（sing-box-lx `v1.14.2-lx.11`，含 xhttp）。sing-box 导出能跑的线路直接用；只有 Xray 导出的线路先翻译成同一套出站再进同一条隧道。版本号在 `V7Version.marketing` 与 SFI `MARKETING_VERSION`。
 
 ## 待办（计划中的侵入点，落地时回填上表）
 

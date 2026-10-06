@@ -77,12 +77,15 @@ public enum V7ConfigBuilder {
         public let type: String
         public var region: String?
         public let exportURL: String
+        /// Xray 导出地址。官方 sing-box 表达不了的线路用它翻译进 Veylo 隧道核。
+        public var xrayExportURL: String
         /// 服务端验证通过的内核。空 = 还没验证。
         public var cores: [String]
         public var bestCore: String?
         public var singboxOK: Bool?
-        /// iPhone 隧道只能跑 sing-box。这条为 false 时不能连接。
+        /// 官方 sing-box 导出里就能跑。为 false 时改走 Xray 导出翻译进 Veylo 核。
         public var singboxRunnable: Bool
+        public var veyloRunnable: Bool { singboxRunnable || !xrayExportURL.isEmpty }
         /// 这条线路实际该用的内核：singbox / xray / mihomo。
         public var core: String
         public var id: String { "\(subscriptionId)|\(tag)" }
@@ -93,13 +96,14 @@ public enum V7ConfigBuilder {
             default: return "sing-box"
             }
         }
-        public init(subscriptionId: Int, subscriptionName: String, tag: String, type: String, region: String?, exportURL: String, cores: [String] = [], bestCore: String? = nil, singboxOK: Bool? = nil, singboxRunnable: Bool = true, core: String = "singbox") {
+        public init(subscriptionId: Int, subscriptionName: String, tag: String, type: String, region: String?, exportURL: String, xrayExportURL: String = "", cores: [String] = [], bestCore: String? = nil, singboxOK: Bool? = nil, singboxRunnable: Bool = true, core: String = "singbox") {
             self.subscriptionId = subscriptionId
             self.subscriptionName = subscriptionName
             self.tag = tag
             self.type = type
             self.region = region
             self.exportURL = exportURL
+            self.xrayExportURL = xrayExportURL
             self.cores = cores
             self.bestCore = bestCore
             self.singboxOK = singboxOK
@@ -122,14 +126,14 @@ public enum V7ConfigBuilder {
         }
     }
 
-    public static func lines(in export: [String: Any], subscriptionId: Int, subscriptionName: String, exportURL: String) -> [Line] {
+    public static func lines(in export: [String: Any], subscriptionId: Int, subscriptionName: String, exportURL: String, xrayExportURL: String = "") -> [Line] {
         let skip: Set<String> = ["direct", "block", "dns", "selector", "urltest"]
         guard let outbounds = export["outbounds"] as? [[String: Any]] else { return [] }
         return outbounds.compactMap { outbound in
             let type = (outbound["type"] as? String) ?? ""
             let tag = (outbound["tag"] as? String) ?? ""
             guard !tag.isEmpty, !skip.contains(type) else { return nil }
-            return Line(subscriptionId: subscriptionId, subscriptionName: subscriptionName, tag: tag, type: type, region: nil, exportURL: exportURL)
+            return Line(subscriptionId: subscriptionId, subscriptionName: subscriptionName, tag: tag, type: type, region: nil, exportURL: exportURL, xrayExportURL: xrayExportURL)
         }
     }
 

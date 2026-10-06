@@ -61,7 +61,12 @@ public enum V7ProfileBridge {
             if let error { throw BridgeError.configInvalid(error.localizedDescription) }
         }.value
 
-        // 4) 落 profile：复用已有 Veylo profile 或新建 local
+        return try await writeProfile(content)
+    }
+
+    /// 把已经校验过的配置写成 Veylo 本地 profile。
+    @discardableResult
+    public static func writeProfile(_ content: String) async throws -> Int64 {
         if let existing = try await ProfileManager.get(by: profileName) {
             try await existing.writeAsync(content)
             await MainActor.run { existing.lastUpdated = Date() }
@@ -69,22 +74,36 @@ public enum V7ProfileBridge {
             await SharedPreferences.selectedProfileID.set(existing.mustID)
             try await reloadIfConnected(profileID: existing.mustID)
             return existing.mustID
-        } else {
-            let nextID = try await ProfileManager.nextID()
-            let dir = FilePath.sharedDirectory.appendingPathComponent("configs", isDirectory: true)
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let relPath = "configs/config_\(nextID).json"
-            let profile = Profile(name: profileName, type: .local, path: relPath, lastUpdated: Date())
-            try await profile.writeAsync(content)
-            try await ProfileManager.create(profile)
-            await SharedPreferences.selectedProfileID.set(profile.mustID)
-            return profile.mustID
         }
+        let nextID = try await ProfileManager.nextID()
+        let dir = FilePath.sharedDirectory.appendingPathComponent("configs", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let relPath = "configs/config_\(nextID).json"
+        let profile = Profile(name: profileName, type: .local, path: relPath, lastUpdated: Date())
+        try await profile.writeAsync(content)
+        try await ProfileManager.create(profile)
+        await SharedPreferences.selectedProfileID.set(profile.mustID)
+        return profile.mustID
     }
 
     /// 同步 + 启动 NE。
     public static func syncAndStart(from singboxExportURL: String, proxyConfig: [String: Any]?, selectedTag: String? = nil, autoSwitch: Bool = true, runnableTags: Set<String>? = nil) async throws {
         _ = try await syncProfile(from: singboxExportURL, proxyConfig: proxyConfig, selectedTag: selectedTag, autoSwitch: autoSwitch, runnableTags: runnableTags)
+        try await ensureInstalledAndStart()
+    }
+
+    /// Xray 专有线路：翻译成 sing-box-lx 出站后，仍用同一个 Veylo 隧道核启动。
+    public static func syncAndStartVeylo(xrayExportURL: String, tag: String, proxyConfig: [String: Any]?) async throws {
+        let raw = try await downloadExport(xrayExportURL)
+        let outbound = try V7XrayAdapter.singboxOutbound(exportJSON: raw, tag: tag)
+        let mini: [String: Any] = ["outbounds": [outbound, ["type": "direct", "tag": "direct"]]]
+        let content = try V7ConfigBuilder.build(export: mini, bypass: V7ConfigBuilder.BypassRules.from(proxyConfig), autoSwitch: false)
+        try await Task.detached(priority: .userInitiated) {
+            var error: NSError?
+            LibboxCheckConfig(content, &error)
+            if let error { throw BridgeError.configInvalid(error.localizedDescription) }
+        }.value
+        _ = try await writeProfile(content)
         try await ensureInstalledAndStart()
     }
 

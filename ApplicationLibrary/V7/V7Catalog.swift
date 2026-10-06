@@ -6,18 +6,18 @@ public enum V7Catalog {
         let subs = await activeSubscriptions(fallback: fallback)
         var lines: [V7ConfigBuilder.Line] = []
         for sub in subs {
-            guard let url = sub.export_links?.singbox, !url.isEmpty else { continue }
-            guard let raw = try? await V7ProfileBridge.downloadExport(url),
-                  let export = try? V7ConfigBuilder.parseExport(raw)
-            else { continue }
-            let parsed = V7ConfigBuilder.lines(
-                in: export,
-                subscriptionId: sub.id,
-                subscriptionName: (sub.name?.isEmpty == false ? sub.name! : "订阅"),
-                exportURL: url
-            )
+            let singURL = sub.export_links?.singbox ?? ""
+            let xrayURL = sub.export_links?.xray ?? ""
+            guard !singURL.isEmpty || !xrayURL.isEmpty else { continue }
+            let name = (sub.name?.isEmpty == false ? sub.name! : "订阅")
+            var parsed: [V7ConfigBuilder.Line] = []
+            if !singURL.isEmpty,
+               let raw = try? await V7ProfileBridge.downloadExport(singURL),
+               let export = try? V7ConfigBuilder.parseExport(raw) {
+                parsed = V7ConfigBuilder.lines(in: export, subscriptionId: sub.id, subscriptionName: name, exportURL: singURL, xrayExportURL: xrayURL)
+            }
             let meta = (try? await V7Api.subscriptionLines(sub.id)) ?? []
-            lines.append(contentsOf: join(parsed, meta: meta, subscriptionId: sub.id, subscriptionName: (sub.name?.isEmpty == false ? sub.name! : "订阅")))
+            lines.append(contentsOf: join(parsed, meta: meta, subscriptionId: sub.id, subscriptionName: name, xrayExportURL: xrayURL))
         }
         let proxy = (try? await V7Api.proxyConfig()) ?? [:]
         return (lines, proxy)
@@ -28,7 +28,9 @@ public enum V7Catalog {
             return rows.filter(isActive)
         }
         return fallback.compactMap { row in
-            guard row.export_allowed, let link = row.export_links?.singbox, !link.isEmpty else { return nil }
+            let sing = row.export_links?.singbox ?? ""
+            let xray = row.export_links?.xray ?? ""
+            guard row.export_allowed, !sing.isEmpty || !xray.isEmpty else { return nil }
             guard row.status != "revoked", row.status != "expired" else { return nil }
             return V7MySubscription(id: row.id, name: row.name, status: row.status, export_allowed: row.export_allowed, export_links: row.export_links)
         }
@@ -37,11 +39,13 @@ public enum V7Catalog {
     private static func isActive(_ row: V7MySubscription) -> Bool {
         guard row.status != "revoked", row.status != "expired" else { return false }
         guard row.export_allowed != false else { return false }
-        return !(row.export_links?.singbox ?? "").isEmpty
+        let sing = row.export_links?.singbox ?? ""
+        let xray = row.export_links?.xray ?? ""
+        return !sing.isEmpty || !xray.isEmpty
     }
 
     /// stealth_primary=false 的隐身兄弟不进列表。sing-box 导出里没有、但 /lines 有的线路也列出来，并标上该用的内核。
-    private static func join(_ parsed: [V7ConfigBuilder.Line], meta: [V7LineMeta], subscriptionId: Int, subscriptionName: String) -> [V7ConfigBuilder.Line] {
+    private static func join(_ parsed: [V7ConfigBuilder.Line], meta: [V7LineMeta], subscriptionId: Int, subscriptionName: String, xrayExportURL: String) -> [V7ConfigBuilder.Line] {
         var queues: [String: [V7LineMeta]] = [:]
         for item in meta {
             let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -70,6 +74,7 @@ public enum V7Catalog {
                     type: choice.core,
                     region: nil,
                     exportURL: "",
+                    xrayExportURL: xrayExportURL,
                     cores: item.cores ?? [],
                     bestCore: item.best_core,
                     singboxOK: item.singbox_ok,
