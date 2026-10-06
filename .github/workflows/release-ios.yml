@@ -100,18 +100,34 @@ jobs:
           FASTLANE_SKIP_UPDATE_CHECK: "1"
           FASTLANE_HIDE_CHANGELOG: "1"
           FASTLANE_DISABLE_ANIMATION: "1"
+          FASTLANE_OPT_OUT_USAGE: "1"
         run: |
           set -euo pipefail
-          export APP_STORE_CONNECT_API_KEY_KEY_ID="$API_KEY_ID"
-          export APP_STORE_CONNECT_API_KEY_ISSUER_ID="$API_ISSUER"
-          export APP_STORE_CONNECT_API_KEY_KEY_FILEPATH="$API_KEY_PATH"
-          fastlane produce \
-            --app_identifier "$BUNDLE_ID" \
-            --app_name "Veylo" \
-            --sku "veylo-ios" \
-            --language "zh-Hans" \
-            --team_id "$TEAM_ID" \
-            --skip_devcenter true
+          mkdir -p /tmp/fl/fastlane
+          cat > /tmp/fl/fastlane/Fastfile <<'RUBY'
+          default_platform(:ios)
+          platform :ios do
+            lane :ensure_app do
+              api_key = app_store_connect_api_key(
+                key_id: ENV.fetch("API_KEY_ID"),
+                issuer_id: ENV.fetch("API_ISSUER"),
+                key_filepath: ENV.fetch("API_KEY_PATH"),
+                duration: 1200,
+                in_house: false
+              )
+              produce(
+                api_key: api_key,
+                app_identifier: ENV.fetch("BUNDLE_ID"),
+                app_name: "Veylo",
+                sku: "veylo-ios",
+                language: "zh-Hans",
+                team_id: ENV.fetch("TEAM_ID"),
+                skip_devcenter: true
+              )
+            end
+          end
+          RUBY
+          cd /tmp/fl && fastlane ensure_app
 
       - name: Archive SFI
         run: |
