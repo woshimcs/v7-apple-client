@@ -45,13 +45,14 @@ public enum V7ProfileBridge {
         from singboxExportURL: String,
         proxyConfig: [String: Any]?,
         selectedTag: String? = nil,
-        autoSwitch: Bool = true
+        autoSwitch: Bool = true,
+        runnableTags: Set<String>? = nil
     ) async throws -> Int64 {
         // 1) 拉裸导出（token 即凭证，无需 Bearer）
         let raw = try await downloadExport(singboxExportURL)
 
-        // 2) 包成完整配置。自动切换或钉住选中节点。
-        let content = try V7ConfigBuilder.buildFrom(rawExport: raw, proxyConfig: proxyConfig, selectedTag: selectedTag, autoSwitch: autoSwitch)
+        // 2) 包成完整配置。自动切换只纳入 sing-box 能跑的线路。
+        let content = try V7ConfigBuilder.buildFrom(rawExport: raw, proxyConfig: proxyConfig, selectedTag: selectedTag, autoSwitch: autoSwitch, runnableTags: runnableTags)
 
         // 3) 校验（off main thread）
         try await Task.detached(priority: .userInitiated) {
@@ -82,8 +83,8 @@ public enum V7ProfileBridge {
     }
 
     /// 同步 + 启动 NE。
-    public static func syncAndStart(from singboxExportURL: String, proxyConfig: [String: Any]?, selectedTag: String? = nil, autoSwitch: Bool = true) async throws {
-        _ = try await syncProfile(from: singboxExportURL, proxyConfig: proxyConfig, selectedTag: selectedTag, autoSwitch: autoSwitch)
+    public static func syncAndStart(from singboxExportURL: String, proxyConfig: [String: Any]?, selectedTag: String? = nil, autoSwitch: Bool = true, runnableTags: Set<String>? = nil) async throws {
+        _ = try await syncProfile(from: singboxExportURL, proxyConfig: proxyConfig, selectedTag: selectedTag, autoSwitch: autoSwitch, runnableTags: runnableTags)
         try await ensureInstalledAndStart()
     }
 

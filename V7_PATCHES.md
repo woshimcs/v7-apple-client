@@ -31,6 +31,7 @@
 >
 > 登录闸门、`V7_API_BASE`、entitlements 已落在上表 #7–#13。登录后是 Veylo 壳（首页 / 工具 / 我的），不再进上游 `MainView`。
 > 1.0.1：全部有效订阅的 sing-box 导出 + `/lines` 地区；`refresh_nodes` 会重拉；自动切换默认开（urltest），关掉则钉住选中节点。版本号在 `V7Version.marketing` 与 SFI `MARKETING_VERSION`。
+> 线路带 `cores` / `best_core`。sing-box 能跑就走 sing-box 隧道；验证结果只有 Xray 或 mihomo 的线路会显示「需要该内核」，连接会被拒绝。自动切换不会把这些线路编进组。iPhone 扩展里不能再塞第二个 Go 内核。
 
 ## 待办（计划中的侵入点，落地时回填上表）
 

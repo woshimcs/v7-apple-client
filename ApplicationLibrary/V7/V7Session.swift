@@ -193,6 +193,8 @@ public struct V7LineMeta: Decodable {
     public let region_name: String?
     public let region_emoji: String?
     public let singbox_ok: Bool?
+    public let cores: [String]?
+    public let best_core: String?
     public let stealth_primary: Bool?
 }
 

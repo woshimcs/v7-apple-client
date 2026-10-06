@@ -92,8 +92,17 @@ public enum V7Backend {
         try await request(path, method: "GET", body: Optional<EmptyBody>.none, authed: authed, etag: etag)
     }
 
-    /// 成功即可，data 允许为空（logout / heartbeat / 标记已读）。
-    public static func postVoid<B: Encodable>(_ path: String, body: B? = Optional<EmptyBody>.none, authed: Bool = true) async throws {
+    /// 无请求体。logout / heartbeat 用这个。
+    public static func postVoid(_ path: String, authed: Bool = true) async throws {
+        try await postVoid(path, bodyData: nil, authed: authed)
+    }
+
+    /// 带 JSON 请求体。data 允许为空。
+    public static func postVoid<B: Encodable>(_ path: String, body: B, authed: Bool = true) async throws {
+        try await postVoid(path, bodyData: try JSONEncoder().encode(body), authed: authed)
+    }
+
+    private static func postVoid(_ path: String, bodyData: Data?, authed: Bool) async throws {
         guard let url = try makeURL(path) else { throw V7Error.notConfigured }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -101,9 +110,9 @@ public enum V7Backend {
         if authed, let token = V7Keychain.token() {
             req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        if let body {
+        if let bodyData {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONEncoder().encode(body)
+            req.httpBody = bodyData
         }
         let (data, resp) = try await session.data(for: req)
         guard let http = resp as? HTTPURLResponse else { throw V7Error.http(-1, nil) }

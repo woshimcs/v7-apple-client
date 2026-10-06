@@ -77,14 +77,48 @@ public enum V7ConfigBuilder {
         public let type: String
         public var region: String?
         public let exportURL: String
+        /// 服务端验证通过的内核。空 = 还没验证。
+        public var cores: [String]
+        public var bestCore: String?
+        public var singboxOK: Bool?
+        /// iPhone 隧道只能跑 sing-box。这条为 false 时不能连接。
+        public var singboxRunnable: Bool
+        /// 这条线路实际该用的内核：singbox / xray / mihomo。
+        public var core: String
         public var id: String { "\(subscriptionId)|\(tag)" }
-        public init(subscriptionId: Int, subscriptionName: String, tag: String, type: String, region: String?, exportURL: String) {
+        public var coreLabel: String {
+            switch core {
+            case "xray": return "Xray"
+            case "mihomo": return "mihomo"
+            default: return "sing-box"
+            }
+        }
+        public init(subscriptionId: Int, subscriptionName: String, tag: String, type: String, region: String?, exportURL: String, cores: [String] = [], bestCore: String? = nil, singboxOK: Bool? = nil, singboxRunnable: Bool = true, core: String = "singbox") {
             self.subscriptionId = subscriptionId
             self.subscriptionName = subscriptionName
             self.tag = tag
             self.type = type
             self.region = region
             self.exportURL = exportURL
+            self.cores = cores
+            self.bestCore = bestCore
+            self.singboxOK = singboxOK
+            self.singboxRunnable = singboxRunnable
+            self.core = core
+        }
+
+        /// sing-box 能跑就用 sing-box。只有验证结果里没有 sing-box 时才标成 Xray / mihomo。
+        public static func chooseCore(singboxOK: Bool?, cores: [String], bestCore: String?) -> (core: String, runnable: Bool) {
+            let known: Set<String> = ["singbox", "xray", "mihomo"]
+            let verified = cores.filter { known.contains($0) }
+            if verified.isEmpty {
+                return ("singbox", singboxOK != false)
+            }
+            if verified.contains("singbox"), singboxOK != false {
+                return ("singbox", true)
+            }
+            let alt = bestCore.flatMap { verified.contains($0) ? $0 : nil } ?? verified.first { $0 != "singbox" } ?? verified[0]
+            return (alt, false)
         }
     }
 
@@ -100,12 +134,12 @@ public enum V7ConfigBuilder {
     }
 
     /// 包成完整配置。自动切换开时 selector 改成 urltest；关掉则把 default 钉在选中节点。
-    public static func build(export: [String: Any], bypass: BypassRules, selectedTag: String? = nil, autoSwitch: Bool = true) throws -> String {
+    public static func build(export: [String: Any], bypass: BypassRules, selectedTag: String? = nil, autoSwitch: Bool = true, runnableTags: Set<String>? = nil) throws -> String {
         guard var outbounds = export["outbounds"] as? [[String: Any]], !outbounds.isEmpty else {
             throw BuildError.noOutbounds
         }
         if autoSwitch {
-            outbounds = enableAutoSwitch(outbounds)
+            outbounds = enableAutoSwitch(outbounds, runnableTags: runnableTags)
         } else if let selectedTag {
             outbounds = pinSelector(outbounds, defaultTag: selectedTag)
         }
@@ -171,9 +205,9 @@ public enum V7ConfigBuilder {
     }
 
     /// 一步到位：原始导出字符串 + proxy_config → 完整配置字符串。
-    public static func buildFrom(rawExport: String, proxyConfig: [String: Any]?, selectedTag: String? = nil, autoSwitch: Bool = true) throws -> String {
+    public static func buildFrom(rawExport: String, proxyConfig: [String: Any]?, selectedTag: String? = nil, autoSwitch: Bool = true, runnableTags: Set<String>? = nil) throws -> String {
         let export = try parseExport(rawExport)
-        return try build(export: export, bypass: BypassRules.from(proxyConfig), selectedTag: selectedTag, autoSwitch: autoSwitch)
+        return try build(export: export, bypass: BypassRules.from(proxyConfig), selectedTag: selectedTag, autoSwitch: autoSwitch, runnableTags: runnableTags)
     }
 
     // MARK: - helpers
@@ -189,10 +223,15 @@ public enum V7ConfigBuilder {
 
     /// 把 selector（后端 tag=`proxy`）的 default 改成用户选的节点。节点不在组里则不动。
     /// 对齐安卓 CF-15：自动切换开时，分组出站改成 urltest，节点挂了会自己换。
-    private static func enableAutoSwitch(_ outbounds: [[String: Any]]) -> [[String: Any]] {
+    private static func enableAutoSwitch(_ outbounds: [[String: Any]], runnableTags: Set<String>?) -> [[String: Any]] {
         outbounds.map { outbound in
             guard (outbound["type"] as? String) == "selector" else { return outbound }
             var copy = outbound
+            if let runnableTags, var members = copy["outbounds"] as? [String] {
+                let kept = members.filter { runnableTags.contains($0) }
+                if !kept.isEmpty { members = kept }
+                copy["outbounds"] = members
+            }
             copy["type"] = "urltest"
             copy["url"] = "https://www.gstatic.com/generate_204"
             copy["interval"] = "3m"

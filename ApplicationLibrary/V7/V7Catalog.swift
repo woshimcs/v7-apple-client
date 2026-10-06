@@ -17,7 +17,7 @@ public enum V7Catalog {
                 exportURL: url
             )
             let meta = (try? await V7Api.subscriptionLines(sub.id)) ?? []
-            lines.append(contentsOf: join(parsed, meta: meta))
+            lines.append(contentsOf: join(parsed, meta: meta, subscriptionId: sub.id, subscriptionName: (sub.name?.isEmpty == false ? sub.name! : "订阅")))
         }
         let proxy = (try? await V7Api.proxyConfig()) ?? [:]
         return (lines, proxy)
@@ -40,8 +40,8 @@ public enum V7Catalog {
         return !(row.export_links?.singbox ?? "").isEmpty
     }
 
-    /// stealth_primary=false 的隐身兄弟不进列表；缺字段则展示。地区来自 /lines。
-    private static func join(_ parsed: [V7ConfigBuilder.Line], meta: [V7LineMeta]) -> [V7ConfigBuilder.Line] {
+    /// stealth_primary=false 的隐身兄弟不进列表。sing-box 导出里没有、但 /lines 有的线路也列出来，并标上该用的内核。
+    private static func join(_ parsed: [V7ConfigBuilder.Line], meta: [V7LineMeta], subscriptionId: Int, subscriptionName: String) -> [V7ConfigBuilder.Line] {
         var queues: [String: [V7LineMeta]] = [:]
         for item in meta {
             let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -55,14 +55,53 @@ public enum V7Catalog {
                 let item = bucket.removeFirst()
                 queues[key] = bucket
                 if item.stealth_primary == false { continue }
-                let region = [item.region_emoji, item.region_name]
-                    .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-                    .filter { !$0.isEmpty }
-                    .joined(separator: " ")
-                if !region.isEmpty { line.region = region }
+                line = apply(item, to: line)
             }
             visible.append(line)
         }
+        for (name, leftover) in queues {
+            for item in leftover {
+                if item.stealth_primary == false { continue }
+                let choice = V7ConfigBuilder.Line.chooseCore(singboxOK: item.singbox_ok, cores: item.cores ?? [], bestCore: item.best_core)
+                var line = V7ConfigBuilder.Line(
+                    subscriptionId: subscriptionId,
+                    subscriptionName: subscriptionName,
+                    tag: name,
+                    type: choice.core,
+                    region: nil,
+                    exportURL: "",
+                    cores: item.cores ?? [],
+                    bestCore: item.best_core,
+                    singboxOK: item.singbox_ok,
+                    singboxRunnable: false,
+                    core: choice.core
+                )
+                line.region = regionText(item)
+                visible.append(line)
+            }
+        }
         return visible
+    }
+
+    private static func apply(_ item: V7LineMeta, to line: V7ConfigBuilder.Line) -> V7ConfigBuilder.Line {
+        var copy = line
+        let region = regionText(item)
+        if let region { copy.region = region }
+        let cores = item.cores ?? []
+        let choice = V7ConfigBuilder.Line.chooseCore(singboxOK: item.singbox_ok, cores: cores, bestCore: item.best_core)
+        copy.cores = cores
+        copy.bestCore = item.best_core
+        copy.singboxOK = item.singbox_ok
+        copy.core = choice.core
+        copy.singboxRunnable = choice.runnable && !line.exportURL.isEmpty
+        return copy
+    }
+
+    private static func regionText(_ item: V7LineMeta) -> String? {
+        let region = [item.region_emoji, item.region_name]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return region.isEmpty ? nil : region
     }
 }

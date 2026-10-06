@@ -187,8 +187,8 @@ private struct V7LinePicker: View {
                                     } label: {
                                         HStack {
                                             VStack(alignment: .leading, spacing: 2) {
-                                                Text(line.region ?? line.tag).foregroundStyle(.primary)
-                                                Text(line.region == nil ? line.type : line.tag)
+                                                Text(line.region ?? line.tag).foregroundStyle(line.singboxRunnable ? .primary : .secondary)
+                                                Text(line.singboxRunnable ? (line.region == nil ? line.type : line.tag) : "需要 \(line.coreLabel)")
                                                     .font(.caption)
                                                     .foregroundStyle(.secondary)
                                             }

@@ -162,7 +162,7 @@ public final class V7AppState: ObservableObject {
                 if wasConnected, previous != nil {
                     try? await V7ProfileBridge.stop()
                 }
-                setSelected(lines.first?.id)
+                setSelected(lines.first(where: { $0.singboxRunnable })?.id ?? lines.first?.id)
             }
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -212,6 +212,11 @@ public final class V7AppState: ObservableObject {
             lastError = lines.isEmpty ? "没有可用的订阅线路" : "请先选择一条线路"
             return
         }
+        guard line.singboxRunnable, !line.exportURL.isEmpty else {
+            lastError = "这条线路要走 \(line.coreLabel)。iPhone 的 VPN 隧道只能跑 sing-box，这条连不上。"
+            return
+        }
+        let runnableTags = Set(lines.filter { $0.subscriptionId == line.subscriptionId && $0.singboxRunnable }.map(\.tag))
         connecting = true
         defer { connecting = false }
         do {
@@ -219,7 +224,8 @@ public final class V7AppState: ObservableObject {
                 from: line.exportURL,
                 proxyConfig: bypass.asProxyJSON(),
                 selectedTag: line.tag,
-                autoSwitch: autoLineSwitch
+                autoSwitch: autoLineSwitch,
+                runnableTags: runnableTags
             )
             await bindTunnel()
         } catch {
