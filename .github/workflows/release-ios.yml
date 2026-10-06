@@ -96,38 +96,86 @@ jobs:
           echo "API_ISSUER=$API_ISSUER" >> "$GITHUB_ENV"
 
       - name: Ensure App Store Connect app record
-        env:
-          FASTLANE_SKIP_UPDATE_CHECK: "1"
-          FASTLANE_HIDE_CHANGELOG: "1"
-          FASTLANE_DISABLE_ANIMATION: "1"
-          FASTLANE_OPT_OUT_USAGE: "1"
         run: |
           set -euo pipefail
-          mkdir -p /tmp/fl/fastlane
-          cat > /tmp/fl/fastlane/Fastfile <<'RUBY'
-          default_platform(:ios)
-          platform :ios do
-            lane :ensure_app do
-              api_key = app_store_connect_api_key(
-                key_id: ENV.fetch("API_KEY_ID"),
-                issuer_id: ENV.fetch("API_ISSUER"),
-                key_filepath: ENV.fetch("API_KEY_PATH"),
-                duration: 1200,
-                in_house: false
+          python3 - <<'PY'
+          import base64, json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+
+          def b64url(data: bytes) -> str:
+              return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+          def der_to_raw(der: bytes) -> bytes:
+              if der[0] != 0x30:
+                  raise SystemExit("openssl signature was not DER")
+              i = 2
+              if der[1] & 0x80:
+                  i = 2 + (der[1] & 0x7F)
+              def read_int(buf, idx):
+                  if buf[idx] != 0x02:
+                      raise SystemExit("bad DER integer")
+                  ln = buf[idx + 1]
+                  val = buf[idx + 2:idx + 2 + ln]
+                  if len(val) > 32:
+                      val = val[-32:]
+                  return val.rjust(32, b"\x00"), idx + 2 + ln
+              r, i = read_int(der, i)
+              s, _ = read_int(der, i)
+              return r + s
+
+          now = int(time.time())
+          header = b64url(json.dumps({"alg": "ES256", "kid": os.environ["API_KEY_ID"], "typ": "JWT"}, separators=(",", ":")).encode())
+          payload = b64url(json.dumps({
+              "iss": os.environ["API_ISSUER"],
+              "iat": now,
+              "exp": now + 1200,
+              "aud": "appstoreconnect-v1",
+          }, separators=(",", ":")).encode())
+          signing_input = f"{header}.{payload}".encode()
+          der = subprocess.check_output(["openssl", "dgst", "-sha256", "-sign", os.environ["API_KEY_PATH"]], input=signing_input)
+          token = f"{header}.{payload}.{b64url(der_to_raw(der))}"
+
+          def api(method, path, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              req = urllib.request.Request(
+                  "https://api.appstoreconnect.apple.com" + path,
+                  data=data,
+                  method=method,
+                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
               )
-              produce(
-                api_key: api_key,
-                app_identifier: ENV.fetch("BUNDLE_ID"),
-                app_name: "Veylo",
-                sku: "veylo-ios",
-                language: "zh-Hans",
-                team_id: ENV.fetch("TEAM_ID"),
-                skip_devcenter: true
-              )
-            end
-          end
-          RUBY
-          cd /tmp/fl && fastlane ensure_app
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      return resp.status, json.load(resp)
+              except urllib.error.HTTPError as e:
+                  raw = e.read().decode("utf-8", "replace")
+                  print(f"HTTP {e.code} {method} {path}")
+                  print(raw[:2000])
+                  return e.code, None
+
+          bundle = os.environ["BUNDLE_ID"]
+          q = urllib.parse.urlencode({"filter[bundleId]": bundle, "limit": "1"})
+          code, found = api("GET", "/v1/apps?" + q)
+          if code == 200 and found and found.get("data"):
+              print("app already exists", found["data"][0]["id"])
+              sys.exit(0)
+          code, created = api("POST", "/v1/apps", {
+              "data": {
+                  "type": "apps",
+                  "attributes": {
+                      "bundleId": bundle,
+                      "name": "Veylo",
+                      "primaryLocale": "zh-Hans",
+                      "sku": "veylo-ios",
+                  },
+              },
+          })
+          if code == 201:
+              print("created app", created["data"]["id"])
+              sys.exit(0)
+          if code == 409:
+              print("app already exists")
+              sys.exit(0)
+          sys.exit(1)
+          PY
 
       - name: Archive SFI
         run: |
