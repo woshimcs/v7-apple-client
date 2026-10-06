@@ -44,13 +44,14 @@ public enum V7ProfileBridge {
     public static func syncProfile(
         from singboxExportURL: String,
         proxyConfig: [String: Any]?,
-        selectedTag: String? = nil
+        selectedTag: String? = nil,
+        autoSwitch: Bool = true
     ) async throws -> Int64 {
         // 1) 拉裸导出（token 即凭证，无需 Bearer）
         let raw = try await downloadExport(singboxExportURL)
 
-        // 2) 包成完整配置。selectedTag 决定 selector 的 default。
-        let content = try V7ConfigBuilder.buildFrom(rawExport: raw, proxyConfig: proxyConfig, selectedTag: selectedTag)
+        // 2) 包成完整配置。自动切换或钉住选中节点。
+        let content = try V7ConfigBuilder.buildFrom(rawExport: raw, proxyConfig: proxyConfig, selectedTag: selectedTag, autoSwitch: autoSwitch)
 
         // 3) 校验（off main thread）
         try await Task.detached(priority: .userInitiated) {
@@ -81,8 +82,8 @@ public enum V7ProfileBridge {
     }
 
     /// 同步 + 启动 NE。
-    public static func syncAndStart(from singboxExportURL: String, proxyConfig: [String: Any]?, selectedTag: String? = nil) async throws {
-        _ = try await syncProfile(from: singboxExportURL, proxyConfig: proxyConfig, selectedTag: selectedTag)
+    public static func syncAndStart(from singboxExportURL: String, proxyConfig: [String: Any]?, selectedTag: String? = nil, autoSwitch: Bool = true) async throws {
+        _ = try await syncProfile(from: singboxExportURL, proxyConfig: proxyConfig, selectedTag: selectedTag, autoSwitch: autoSwitch)
         try await ensureInstalledAndStart()
     }
 

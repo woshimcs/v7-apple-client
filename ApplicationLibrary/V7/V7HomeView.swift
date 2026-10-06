@@ -13,14 +13,17 @@ public struct V7HomeView: View {
             V7ConnectPage()
                 .tabItem { Label("首页", systemImage: "house") }
                 .tag(0)
+            V7ToolsPage()
+                .tabItem { Label("工具", systemImage: "wrench") }
+                .tag(1)
             V7MePage()
                 .tabItem { Label("我的", systemImage: "person") }
-                .tag(1)
+                .tag(2)
         }
         .task {
             await state.bindTunnel()
             if state.lines.isEmpty {
-                await state.loadLines()
+                await state.syncCatalog()
             }
         }
     }
@@ -105,7 +108,7 @@ private struct V7ConnectPage: View {
                 Task {
                     if connected || connecting {
                         await state.disconnect()
-                    } else if state.selectedTag == nil {
+                    } else if state.selectedLineId == nil {
                         picking = true
                     } else {
                         await state.connect()
@@ -160,6 +163,10 @@ private struct V7LinePicker: View {
     @Environment(\.dismiss) private var dismiss
     let onPick: (String) -> Void
 
+    private var grouped: [String: [V7ConfigBuilder.Line]] {
+        Dictionary(grouping: state.lines, by: { $0.subscriptionName })
+    }
+
     var body: some View {
         NavigationView {
             Group {
@@ -171,18 +178,26 @@ private struct V7LinePicker: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    List(state.lines) { line in
-                        Button {
-                            onPick(line.tag)
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(line.tag).foregroundStyle(.primary)
-                                    Text(line.type).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if line.tag == state.selectedTag {
-                                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                    List {
+                        ForEach(grouped.keys.sorted(), id: \.self) { name in
+                            Section(name) {
+                                ForEach(grouped[name] ?? []) { line in
+                                    Button {
+                                        onPick(line.id)
+                                    } label: {
+                                        HStack {
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(line.region ?? line.tag).foregroundStyle(.primary)
+                                                Text(line.region == nil ? line.type : line.tag)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
+                                            Spacer()
+                                            if line.id == state.selectedLineId {
+                                                Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -196,42 +211,7 @@ private struct V7LinePicker: View {
                     Button("返回") { dismiss() }
                 }
             }
-            .refreshable { await state.loadLines() }
-        }
-        .navigationViewStyle(.stack)
-    }
-}
-
-private struct V7MePage: View {
-    @EnvironmentObject private var state: V7AppState
-
-    var body: some View {
-        NavigationView {
-            List {
-                Section("账户") {
-                    HStack {
-                        Text("账号")
-                        Spacer()
-                        Text(state.username ?? "—").foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("加速")
-                        Spacer()
-                        Text(state.vpnAccessAllowed ? "已开通" : "未开通").foregroundStyle(.secondary)
-                    }
-                }
-                Section {
-                    Button("退出登录", role: .destructive) {
-                        Task { await state.logout() }
-                    }
-                }
-                Section {
-                    Text("版本 \(V7AppState.appVersion()) · 内核 sing-box（GPL-3.0）")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .navigationTitle("我的")
+            .refreshable { await state.syncCatalog() }
         }
         .navigationViewStyle(.stack)
     }

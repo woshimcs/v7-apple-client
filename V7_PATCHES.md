@@ -29,7 +29,8 @@
 > - `ApplicationLibrary/V7/`（登录、session、1.12+ 配置、profile 桥）。由同步目录编进 ApplicationLibrary。
 > - `.github/workflows/release-ios.yml`（TestFlight CI，`macos-26` + Xcode 26，Libbox 取 sing-box v1.14.0）。
 >
-> 登录闸门、`V7_API_BASE`、entitlements 已落在上表 #7–#13。登录后是 Veylo 首页（线路、连接、断开、我的），不再进上游 `MainView`。选中的线路写入 selector `default`。
+> 登录闸门、`V7_API_BASE`、entitlements 已落在上表 #7–#13。登录后是 Veylo 壳（首页 / 工具 / 我的），不再进上游 `MainView`。
+> 1.0.1：全部有效订阅的 sing-box 导出 + `/lines` 地区；`refresh_nodes` 会重拉；自动切换默认开（urltest），关掉则钉住选中节点。版本号在 `V7Version.marketing` 与 SFI `MARKETING_VERSION`。
 
 ## 待办（计划中的侵入点，落地时回填上表）
 

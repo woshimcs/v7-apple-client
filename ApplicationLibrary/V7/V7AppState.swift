@@ -22,22 +22,32 @@ public final class V7AppState: ObservableObject {
     /// 本地版本低于 min_supported_version 时为 true（引导更新）。
     @Published public private(set) var upgradeRequired: Bool = false
     @Published public private(set) var lines: [V7ConfigBuilder.Line] = []
-    @Published public private(set) var selectedTag: String?
+    @Published public private(set) var selectedLineId: String?
     @Published public private(set) var connecting = false
     @Published public private(set) var vpnStatus: NEVPNStatus = .invalid
     @Published public private(set) var username: String?
+    @Published public private(set) var profile: V7User?
+    @Published public private(set) var notices: [V7Notice] = []
+    @Published public var autoLineSwitch: Bool
+    @Published public private(set) var bypass = V7ConfigBuilder.BypassRules()
 
     private var sessionEtag: String?
     private var pollTask: Task<Void, Never>?
     private var statusBag = Set<AnyCancellable>()
     private var tunnel: ExtensionProfile?
-    private let tagKey = "v7.selectedLineTag"
+    private let lineKey = "v7.selectedLineId"
     private let userKey = "v7.username"
+    private let autoKey = "v7.autoLineSwitch"
 
     private init() {
         isLoggedIn = V7Keychain.hasToken
-        selectedTag = UserDefaults.standard.string(forKey: tagKey)
+        selectedLineId = UserDefaults.standard.string(forKey: lineKey)
         username = UserDefaults.standard.string(forKey: userKey)
+        if UserDefaults.standard.object(forKey: autoKey) == nil {
+            autoLineSwitch = true
+        } else {
+            autoLineSwitch = UserDefaults.standard.bool(forKey: autoKey)
+        }
     }
 
     // MARK: - 登录 / 登出
@@ -60,10 +70,12 @@ public final class V7AppState: ObservableObject {
     public func logout() async {
         pollTask?.cancel(); pollTask = nil
         try? await V7ProfileBridge.stop()
-        V7Api.logout()
+        await V7Api.logout()
         session = nil
         sessionEtag = nil
         lines = []
+        profile = nil
+        notices = []
         vpnAccessAllowed = false
         username = nil
         UserDefaults.standard.removeObject(forKey: userKey)
@@ -78,10 +90,13 @@ public final class V7AppState: ObservableObject {
         do {
             let (s, etag) = try await V7Api.session(full: full, etag: full ? nil : sessionEtag)
             sessionEtag = etag ?? sessionEtag
-            apply(session: s)
+            let resync = await apply(session: s)
+            if full || resync {
+                await syncCatalog()
+            }
             if full {
-                await syncExportIfAllowed(s)
-                await loadLines(from: s)
+                await loadAccount()
+                await V7Api.heartbeat()
             }
         } catch is V7NotModified {
             // 未变化，保留旧 session
@@ -93,32 +108,29 @@ public final class V7AppState: ObservableObject {
         }
     }
 
-    private func apply(session s: V7Session) {
+    /// 应用闸门。返回 true 表示这次要重拉全部线路（refresh_nodes）。
+    private func apply(session s: V7Session) async -> Bool {
         session = s
         vpnAccessAllowed = s.vpn_access.allowed
         denyReason = s.vpn_access.deny_reason
         upgradeRequired = Self.isOutdated(local: Self.appVersion(), min: s.account.min_supported_version)
 
         let actions = Set(s.client_actions.compactMap { V7ClientAction(rawValue: $0) })
-        if !s.vpn_access.allowed {
-            // 准入被拒：按 actions 断连 / 清节点
-            Task {
-                if actions.contains(.disconnectVpn) { try? await V7ProfileBridge.stop() }
-                if actions.contains(.purgeNodes) { try? await V7ProfileBridge.purge() }
-            }
+        if actions.contains(.lockVpnUi) {
+            vpnAccessAllowed = false
         }
-    }
-
-    /// 登录后把第一条可导出订阅写成本地 profile，连接仍走上游按钮（系统 VPN 授权框）。
-    private func syncExportIfAllowed(_ s: V7Session) async {
-        guard s.vpn_access.allowed,
-              let link = s.subscriptions.first(where: { $0.export_allowed && ($0.export_links?.singbox?.isEmpty == false) })?.export_links?.singbox
-        else { return }
-        do {
-            try await V7ProfileBridge.syncProfile(from: link, proxyConfig: nil, selectedTag: selectedTag)
-        } catch {
-            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        if actions.contains(.notifyUser), let reason = s.vpn_access.deny_reason, !reason.isEmpty {
+            lastError = reason
         }
+        if actions.contains(.disconnectVpn) || !s.vpn_access.allowed {
+            try? await V7ProfileBridge.stop()
+        }
+        if actions.contains(.purgeNodes) {
+            try? await V7ProfileBridge.purge()
+            lines = []
+            setSelected(nil)
+        }
+        return actions.contains(.refreshNodes)
     }
 
     /// 后台轮询：按 next_poll_after_sec（缺省 1800s）拉 minimal。
@@ -136,55 +148,79 @@ public final class V7AppState: ObservableObject {
 
     // MARK: - 连接编排
 
-    /// 首页线路列表。没有已选、或已选不在新列表里时，落到第一条。
-    public func loadLines(from s: V7Session? = nil) async {
-        let source = s ?? session
-        guard let source, let link = exportLink(in: source) else {
-            lines = []
-            return
-        }
+    /// 全部有效订阅 + /lines 元数据。已选线路消失且正在连接时先断开。
+    public func syncCatalog() async {
         do {
-            let raw = try await V7ProfileBridge.downloadExport(link)
-            let export = try V7ConfigBuilder.parseExport(raw)
-            let parsed = V7ConfigBuilder.lines(in: export)
-            lines = parsed
-            if selectedTag == nil || !parsed.contains(where: { $0.tag == selectedTag }) {
-                setSelected(parsed.first?.tag)
+            let result = try await V7Catalog.sync(fallback: session?.subscriptions ?? [])
+            let wasConnected = vpnStatus == .connected || vpnStatus == .connecting
+            let previous = selectedLineId
+            lines = result.lines
+            bypass = V7ConfigBuilder.BypassRules.from(result.proxy)
+            if let previous, lines.contains(where: { $0.id == previous }) {
+                setSelected(previous)
+            } else {
+                if wasConnected, previous != nil {
+                    try? await V7ProfileBridge.stop()
+                }
+                setSelected(lines.first?.id)
             }
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
-    public func selectLine(_ tag: String) async {
-        setSelected(tag)
+    public func loadLines() async { await syncCatalog() }
+
+    public func loadAccount() async {
+        guard isLoggedIn else { return }
+        if let user = try? await V7Api.me() {
+            profile = user
+            if let name = user.username, !name.isEmpty {
+                username = name
+                UserDefaults.standard.set(name, forKey: userKey)
+            }
+        }
+        notices = (try? await V7Api.notices()) ?? notices
+    }
+
+    public func selectLine(_ id: String) async {
+        setSelected(id)
         if vpnStatus == .connected || vpnStatus == .connecting {
             await connect()
         }
     }
 
-    /// 连接：选中线路写入 selector.default，再拉起系统 VPN。
+    public func setAutoLineSwitch(_ on: Bool) async {
+        autoLineSwitch = on
+        UserDefaults.standard.set(on, forKey: autoKey)
+        if vpnStatus == .connected || vpnStatus == .connecting {
+            await connect()
+        }
+    }
+
+    /// 用选中线路所属订阅的 sing-box 导出连接。自动切换开则 urltest，关则钉住该节点。
     public func connect() async {
         lastError = nil
-        guard vpnAccessAllowed, let s = session else {
+        guard vpnAccessAllowed else {
             lastError = denyReason ?? "当前不可连接"
             return
         }
-        guard let link = exportLink(in: s) else {
-            lastError = "没有可用的订阅线路"
-            return
+        if lines.isEmpty {
+            await syncCatalog()
         }
-        if selectedTag == nil {
-            await loadLines(from: s)
-        }
-        guard selectedTag != nil else {
-            lastError = "请先选择一条线路"
+        guard let line = selectedLine else {
+            lastError = lines.isEmpty ? "没有可用的订阅线路" : "请先选择一条线路"
             return
         }
         connecting = true
         defer { connecting = false }
         do {
-            try await V7ProfileBridge.syncAndStart(from: link, proxyConfig: nil, selectedTag: selectedTag)
+            try await V7ProfileBridge.syncAndStart(
+                from: line.exportURL,
+                proxyConfig: bypass.asProxyJSON(),
+                selectedTag: line.tag,
+                autoSwitch: autoLineSwitch
+            )
             await bindTunnel()
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -215,23 +251,38 @@ public final class V7AppState: ObservableObject {
             .store(in: &statusBag)
     }
 
+    public var selectedLine: V7ConfigBuilder.Line? {
+        guard let selectedLineId else { return nil }
+        return lines.first { $0.id == selectedLineId }
+    }
+
     public var selectedLineName: String {
-        if let selectedTag, let line = lines.first(where: { $0.tag == selectedTag }) {
-            return line.tag
+        guard let line = selectedLine else { return "点击选择线路" }
+        if let region = line.region, !region.isEmpty { return "\(region) · \(line.tag)" }
+        return line.tag
+    }
+
+    public func probeLatency() async -> String {
+        let start = Date()
+        var req = URLRequest(url: URL(string: "https://www.gstatic.com/generate_204")!)
+        req.timeoutInterval = 8
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            return "\(ms) ms · HTTP \(code)"
+        } catch {
+            return "失败：\(error.localizedDescription)"
         }
-        return "点击选择线路"
     }
 
-    private func exportLink(in s: V7Session) -> String? {
-        s.subscriptions.first(where: { $0.export_allowed && ($0.export_links?.singbox?.isEmpty == false) })?.export_links?.singbox
-    }
-
-    private func setSelected(_ tag: String?) {
-        selectedTag = tag
-        if let tag {
-            UserDefaults.standard.set(tag, forKey: tagKey)
+    private func setSelected(_ id: String?) {
+        selectedLineId = id
+        if let id {
+            UserDefaults.standard.set(id, forKey: lineKey)
         } else {
-            UserDefaults.standard.removeObject(forKey: tagKey)
+            UserDefaults.standard.removeObject(forKey: lineKey)
         }
     }
 

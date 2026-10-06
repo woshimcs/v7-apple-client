@@ -92,6 +92,51 @@ public enum V7Backend {
         try await request(path, method: "GET", body: Optional<EmptyBody>.none, authed: authed, etag: etag)
     }
 
+    /// 成功即可，data 允许为空（logout / heartbeat / 标记已读）。
+    public static func postVoid<B: Encodable>(_ path: String, body: B? = Optional<EmptyBody>.none, authed: Bool = true) async throws {
+        guard let url = try makeURL(path) else { throw V7Error.notConfigured }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if authed, let token = V7Keychain.token() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        if let body {
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONEncoder().encode(body)
+        }
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw V7Error.http(-1, nil) }
+        guard (200 ..< 300).contains(http.statusCode) else {
+            throw V7Error.http(http.statusCode, String(data: data, encoding: .utf8))
+        }
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let ok = obj["success"] as? Bool, !ok {
+            throw V7Error.api((obj["error"] as? String) ?? "unknown")
+        }
+    }
+
+    /// envelope.data 为 JSON 对象时原样返回（proxy-config）。
+    public static func getObject(_ path: String) async throws -> [String: Any] {
+        guard let url = try makeURL(path) else { throw V7Error.notConfigured }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let token = V7Keychain.token() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200 ..< 300).contains(http.statusCode) else {
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            throw V7Error.http(code, String(data: data, encoding: .utf8))
+        }
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (obj["success"] as? Bool) == true,
+              let payload = obj["data"] as? [String: Any]
+        else { throw V7Error.decoding("proxy-config") }
+        return payload
+    }
+
     struct EmptyBody: Encodable {}
 
     /// path 以 `/api/...` 开头，可带 query。不能用 appendingPathComponent，它会把 `/` 编成 %2F。

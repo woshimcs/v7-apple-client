@@ -24,13 +24,17 @@ public enum V7ConfigBuilder {
     /// proxy_config 的 bypass 输入（字段名容错：兼容后端 proxyRoutingService 的常见命名）。
     public struct BypassRules {
         public var directDomainSuffix: [String]
+        public var directDomain: [String]
+        public var directDomainKeyword: [String]
         public var directIPCIDR: [String]
-        public init(directDomainSuffix: [String] = [], directIPCIDR: [String] = []) {
+        public init(directDomainSuffix: [String] = [], directDomain: [String] = [], directDomainKeyword: [String] = [], directIPCIDR: [String] = []) {
             self.directDomainSuffix = directDomainSuffix
+            self.directDomain = directDomain
+            self.directDomainKeyword = directDomainKeyword
             self.directIPCIDR = directIPCIDR
         }
 
-        /// 从 /me/session 的 proxy_config(任意 JSON 字典)宽松解析。
+        /// 从 /me/proxy-config 宽松解析。键名与安卓 ProxyConfigDto 一致。
         public static func from(_ proxy: [String: Any]?) -> BypassRules {
             guard let proxy else { return BypassRules() }
             func strs(_ keys: [String]) -> [String] {
@@ -40,9 +44,20 @@ public enum V7ConfigBuilder {
                 return []
             }
             return BypassRules(
-                directDomainSuffix: strs(["direct_domains", "bypass_domains", "direct_domain_suffix"]),
-                directIPCIDR: strs(["direct_ip_cidr", "bypass_ip_cidr", "direct_ips"])
+                directDomainSuffix: strs(["domain_suffix", "direct_domains", "bypass_domains", "direct_domain_suffix"]),
+                directDomain: strs(["domain"]),
+                directDomainKeyword: strs(["domain_keyword"]),
+                directIPCIDR: strs(["ip_cidr", "direct_ip_cidr", "bypass_ip_cidr", "direct_ips"])
             )
+        }
+
+        public func asProxyJSON() -> [String: Any] {
+            [
+                "domain_suffix": directDomainSuffix,
+                "domain": directDomain,
+                "domain_keyword": directDomainKeyword,
+                "ip_cidr": directIPCIDR,
+            ]
         }
     }
 
@@ -56,33 +71,42 @@ public enum V7ConfigBuilder {
 
     /// 可点选的线路。跳过 direct / selector / urltest，名字用出站 tag（与后端节点名一致）。
     public struct Line: Identifiable, Hashable {
+        public let subscriptionId: Int
+        public let subscriptionName: String
         public let tag: String
         public let type: String
-        public var id: String { tag }
-        public init(tag: String, type: String) {
+        public var region: String?
+        public let exportURL: String
+        public var id: String { "\(subscriptionId)|\(tag)" }
+        public init(subscriptionId: Int, subscriptionName: String, tag: String, type: String, region: String?, exportURL: String) {
+            self.subscriptionId = subscriptionId
+            self.subscriptionName = subscriptionName
             self.tag = tag
             self.type = type
+            self.region = region
+            self.exportURL = exportURL
         }
     }
 
-    public static func lines(in export: [String: Any]) -> [Line] {
+    public static func lines(in export: [String: Any], subscriptionId: Int, subscriptionName: String, exportURL: String) -> [Line] {
         let skip: Set<String> = ["direct", "block", "dns", "selector", "urltest"]
         guard let outbounds = export["outbounds"] as? [[String: Any]] else { return [] }
         return outbounds.compactMap { outbound in
             let type = (outbound["type"] as? String) ?? ""
             let tag = (outbound["tag"] as? String) ?? ""
             guard !tag.isEmpty, !skip.contains(type) else { return nil }
-            return Line(tag: tag, type: type)
+            return Line(subscriptionId: subscriptionId, subscriptionName: subscriptionName, tag: tag, type: type, region: nil, exportURL: exportURL)
         }
     }
 
-    /// 包成完整配置并返回 JSON 字符串（pretty）。
-    /// `selectedTag` 写进 selector 的 `default`，连接时走用户选的那条，而不是导出里的第一条。
-    public static func build(export: [String: Any], bypass: BypassRules, selectedTag: String? = nil) throws -> String {
+    /// 包成完整配置。自动切换开时 selector 改成 urltest；关掉则把 default 钉在选中节点。
+    public static func build(export: [String: Any], bypass: BypassRules, selectedTag: String? = nil, autoSwitch: Bool = true) throws -> String {
         guard var outbounds = export["outbounds"] as? [[String: Any]], !outbounds.isEmpty else {
             throw BuildError.noOutbounds
         }
-        if let selectedTag {
+        if autoSwitch {
+            outbounds = enableAutoSwitch(outbounds)
+        } else if let selectedTag {
             outbounds = pinSelector(outbounds, defaultTag: selectedTag)
         }
 
@@ -103,6 +127,12 @@ public enum V7ConfigBuilder {
         var rules: [[String: Any]] = []
         if !bypass.directDomainSuffix.isEmpty {
             rules.append(["domain_suffix": bypass.directDomainSuffix, "outbound": "direct"])
+        }
+        if !bypass.directDomain.isEmpty {
+            rules.append(["domain": bypass.directDomain, "outbound": "direct"])
+        }
+        if !bypass.directDomainKeyword.isEmpty {
+            rules.append(["domain_keyword": bypass.directDomainKeyword, "outbound": "direct"])
         }
         if !bypass.directIPCIDR.isEmpty {
             rules.append(["ip_cidr": bypass.directIPCIDR, "outbound": "direct"])
@@ -141,9 +171,9 @@ public enum V7ConfigBuilder {
     }
 
     /// 一步到位：原始导出字符串 + proxy_config → 完整配置字符串。
-    public static func buildFrom(rawExport: String, proxyConfig: [String: Any]?, selectedTag: String? = nil) throws -> String {
+    public static func buildFrom(rawExport: String, proxyConfig: [String: Any]?, selectedTag: String? = nil, autoSwitch: Bool = true) throws -> String {
         let export = try parseExport(rawExport)
-        return try build(export: export, bypass: BypassRules.from(proxyConfig), selectedTag: selectedTag)
+        return try build(export: export, bypass: BypassRules.from(proxyConfig), selectedTag: selectedTag, autoSwitch: autoSwitch)
     }
 
     // MARK: - helpers
@@ -158,6 +188,21 @@ public enum V7ConfigBuilder {
     }
 
     /// 把 selector（后端 tag=`proxy`）的 default 改成用户选的节点。节点不在组里则不动。
+    /// 对齐安卓 CF-15：自动切换开时，分组出站改成 urltest，节点挂了会自己换。
+    private static func enableAutoSwitch(_ outbounds: [[String: Any]]) -> [[String: Any]] {
+        outbounds.map { outbound in
+            guard (outbound["type"] as? String) == "selector" else { return outbound }
+            var copy = outbound
+            copy["type"] = "urltest"
+            copy["url"] = "https://www.gstatic.com/generate_204"
+            copy["interval"] = "3m"
+            copy["tolerance"] = 50
+            copy["interrupt_exist_connections"] = false
+            copy.removeValue(forKey: "default")
+            return copy
+        }
+    }
+
     private static func pinSelector(_ outbounds: [[String: Any]], defaultTag: String) -> [[String: Any]] {
         outbounds.map { outbound in
             guard (outbound["type"] as? String) == "selector",

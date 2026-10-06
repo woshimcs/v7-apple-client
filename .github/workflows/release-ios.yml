@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "MARKETING_VERSION，如 1.0.0"
+        description: "MARKETING_VERSION，与 V7Version.marketing 一致"
         required: false
-        default: "1.0.0"
+        default: "1.0.1"
       git_ref:
         description: "要编的 v7-apple-client ref，留空=当前提交"
         required: false
@@ -20,7 +20,7 @@ on:
       version:
         type: string
         required: false
-        default: "1.0.0"
+        default: "1.0.1"
       git_ref:
         type: string
         required: true
