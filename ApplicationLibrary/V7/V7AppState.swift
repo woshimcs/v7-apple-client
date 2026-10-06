@@ -60,6 +60,9 @@ public final class V7AppState: ObservableObject {
             let (s, etag) = try await V7Api.session(full: full, etag: full ? nil : sessionEtag)
             sessionEtag = etag ?? sessionEtag
             apply(session: s)
+            if full {
+                await syncExportIfAllowed(s)
+            }
         } catch is V7NotModified {
             // 未变化，保留旧 session
         } catch let V7Backend.V7Error.http(code, _) where code == 401 {
@@ -83,6 +86,18 @@ public final class V7AppState: ObservableObject {
                 if actions.contains(.disconnectVpn) { try? await V7ProfileBridge.stop() }
                 if actions.contains(.purgeNodes) { try? await V7ProfileBridge.purge() }
             }
+        }
+    }
+
+    /// 登录后把第一条可导出订阅写成本地 profile，连接仍走上游按钮（系统 VPN 授权框）。
+    private func syncExportIfAllowed(_ s: V7Session) async {
+        guard s.vpn_access.allowed,
+              let link = s.subscriptions.first(where: { $0.export_allowed && ($0.export_links?.singbox?.isEmpty == false) })?.export_links?.singbox
+        else { return }
+        do {
+            try await V7ProfileBridge.syncProfile(from: link, proxyConfig: nil)
+        } catch {
+            lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 

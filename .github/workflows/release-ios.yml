@@ -1,106 +1,119 @@
-# =============================================================================
-# release-ios.yml — Veylo iOS 发版（archive → TestFlight → 回填后端）
-# =============================================================================
-# 设计对齐 agent-charter / VERSION_MANAGEMENT：
-#   - release 签名 + CI 注入版本号（禁止硬编码 1.0.0）；
-#   - 公证/上传走 App Store Connect API Key(.p8)，不用 Apple ID 密码；
-#   - 本仓 public → macOS runner 免费，不烧私有额度；
-#   - 发布后回填后端 POST /api/v1/admin/releases（platform=ios，download_url=TestFlight 链接）。
-#
-# 复用上游 Makefile 既有通路：archive_ios（xcodebuild archive）+ Upload.plist（method=app-store）。
-# Libbox 由 SwiftPM 解析，无需手动拉取。
-#
-# ⚠️ 未在非 Mac 环境验证；首次跑前需在 Mac/Actions 上核对 scheme/证书/Provisioning。
-# 前置 Secrets 见 docs/PREREQUISITES.md §5。
-# =============================================================================
+# Veylo iOS → TestFlight.
+# Libbox 用 sing-box v1.14.0（与这份 SFI 壳一致）。导出格式对齐现网 1.12+。
+# 直接在本仓跑需要 APPLE_API_* secrets。桌面仓 v7-win-pc 已有这三把钥匙，
+# 用 workflow_call 把它们传进来，避免把密钥再复制一份。
 name: release-ios
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "MARKETING_VERSION，如 1.0.0（不带 v 前缀）"
+        description: "MARKETING_VERSION，如 1.0.0"
+        required: false
+        default: "1.0.0"
+      git_ref:
+        description: "要编的 v7-apple-client ref，留空=当前提交"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: false
+        default: "1.0.0"
+      git_ref:
+        type: string
         required: true
-      build_number:
-        description: "CURRENT_PROJECT_VERSION（留空=用 run_number）"
-        required: false
-        default: ""
-      testflight_url:
-        description: "TestFlight 公测链接（用于回填下载页；留空则跳过回填）"
-        required: false
-        default: ""
-      channel:
-        description: "回填渠道 stable|beta"
-        required: false
-        default: "beta"
-
-concurrency:
-  group: release-ios
-  cancel-in-progress: false
+    secrets:
+      APPLE_API_KEY_ID:
+        required: true
+      APPLE_API_ISSUER:
+        required: true
+      APPLE_API_KEY_P8:
+        required: true
 
 jobs:
   release:
-    runs-on: macos-14
-    timeout-minutes: 60
+    runs-on: macos-15
+    timeout-minutes: 120
     env:
-      VERSION: ${{ github.event.inputs.version }}
-      BUILD_NUMBER: ${{ github.event.inputs.build_number != '' && github.event.inputs.build_number || github.run_number }}
-      KEYCHAIN: ${{ runner.temp }}/v7-signing.keychain-db
-      API_KEY_DIR: ${{ runner.temp }}/appstore_private_keys
+      VERSION: ${{ inputs.version || '1.0.0' }}
+      TEAM_ID: "4534A24396"
+      BUNDLE_ID: link.veylo.ios
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout v7-apple-client
+        uses: actions/checkout@v4
         with:
+          repository: woshimcs/v7-apple-client
+          ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.sha }}
           submodules: recursive
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app || sudo xcode-select -s /Applications/Xcode.app
+      - name: Select Xcode 16.4
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
 
-      - name: Install xcbeautify
-        run: brew install xcbeautify || true
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
 
-      # ---- 签名材料 ----------------------------------------------------------
-      - name: Import App Store Connect API key (.p8)
+      - name: Build Libbox.xcframework (sing-box v1.14.0, iOS)
+        run: |
+          set -euo pipefail
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          gomobile init
+          git clone --depth 1 --branch v1.14.0 https://github.com/SagerNet/sing-box.git sing-box-src
+          (
+            cd sing-box-src
+            go run ./cmd/internal/build_libbox -target apple -platform ios
+          )
+          rm -rf Libbox.xcframework
+          mv sing-box-src/Libbox.xcframework Libbox.xcframework
+          # gomobile 有时打出 macOS 风格的 Versions/A，iOS 设备切片要摊平
+          for framework in Libbox.xcframework/ios-*/Libbox.framework; do
+            if [ -d "$framework/Versions/A" ]; then
+              shallow="${framework}.shallow"
+              rm -rf "$shallow"
+              ditto "$framework/Versions/A" "$shallow"
+              rm -rf "$framework"
+              mv "$shallow" "$framework"
+            fi
+          done
+          test -d Libbox.xcframework
+
+      - name: Import App Store Connect API key
         env:
           API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           API_KEY_P8_B64: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
           set -euo pipefail
-          mkdir -p "$API_KEY_DIR"
-          echo "$API_KEY_P8_B64" | base64 --decode > "$API_KEY_DIR/AuthKey_${API_KEY_ID}.p8"
-          echo "API_KEY_PATH=$API_KEY_DIR/AuthKey_${API_KEY_ID}.p8" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/appstore_private_keys"
+          echo "$API_KEY_P8_B64" | base64 --decode > "$RUNNER_TEMP/appstore_private_keys/AuthKey_${API_KEY_ID}.p8"
+          echo "API_KEY_PATH=$RUNNER_TEMP/appstore_private_keys/AuthKey_${API_KEY_ID}.p8" >> "$GITHUB_ENV"
+          echo "API_KEY_ID=$API_KEY_ID" >> "$GITHUB_ENV"
+          echo "API_ISSUER=$API_ISSUER" >> "$GITHUB_ENV"
 
-      - name: Import distribution certificate
+      - name: Ensure App Store Connect app record
         env:
-          CERT_P12_B64: ${{ secrets.IOS_DIST_CERT_P12 }}
-          CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+          FASTLANE_HIDE_CHANGELOG: "1"
+          FASTLANE_DISABLE_ANIMATION: "1"
         run: |
           set -euo pipefail
-          CERT_PATH="${{ runner.temp }}/dist.p12"
-          echo "$CERT_P12_B64" | base64 --decode > "$CERT_PATH"
-          security create-keychain -p "" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "" "$KEYCHAIN"
-          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN" >/dev/null
+          export APP_STORE_CONNECT_API_KEY_KEY_ID="$API_KEY_ID"
+          export APP_STORE_CONNECT_API_KEY_ISSUER_ID="$API_ISSUER"
+          export APP_STORE_CONNECT_API_KEY_KEY_FILEPATH="$API_KEY_PATH"
+          fastlane produce \
+            --app_identifier "$BUNDLE_ID" \
+            --app_name "Veylo" \
+            --sku "veylo-ios" \
+            --language "zh-Hans" \
+            --team_id "$TEAM_ID" \
+            --skip_devcenter true
 
-      - name: Install provisioning profiles
-        env:
-          APP_PROFILE_B64: ${{ secrets.IOS_PROVISION_PROFILE }}
-          EXT_PROFILE_B64: ${{ secrets.IOS_EXT_PROVISION_PROFILE }}
-        run: |
-          set -euo pipefail
-          PP_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
-          mkdir -p "$PP_DIR"
-          if [ -n "${APP_PROFILE_B64:-}" ]; then echo "$APP_PROFILE_B64" | base64 --decode > "$PP_DIR/veylo_app.mobileprovision"; fi
-          if [ -n "${EXT_PROFILE_B64:-}" ]; then echo "$EXT_PROFILE_B64" | base64 --decode > "$PP_DIR/veylo_ext.mobileprovision"; fi
-
-      # ---- 构建 + 归档 -------------------------------------------------------
-      - name: Archive (SFI, Release, signed)
-        env:
-          V7_API_BASE: ${{ secrets.V7_API_BASE }}
-          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Archive SFI
         run: |
           set -euo pipefail
           rm -rf build/SFI.xcarchive
@@ -113,47 +126,23 @@ jobs:
             -authenticationKeyPath "$API_KEY_PATH" \
             -authenticationKeyID "$API_KEY_ID" \
             -authenticationKeyIssuerID "$API_ISSUER" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            "CODE_SIGN_IDENTITY=Apple Distribution" \
             MARKETING_VERSION="$VERSION" \
-            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-            V7_API_BASE="$V7_API_BASE" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            V7_API_BASE="https://veylo.link" \
             | xcbeautify
 
-      - name: Export + upload to TestFlight
-        env:
-          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      - name: Upload to TestFlight
         run: |
           set -euo pipefail
           xcodebuild -exportArchive \
             -archivePath build/SFI.xcarchive \
+            -exportPath build/export \
             -exportOptionsPlist SFI/Upload.plist \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$API_KEY_PATH" \
             -authenticationKeyID "$API_KEY_ID" \
             -authenticationKeyIssuerID "$API_ISSUER" \
             | xcbeautify
-
-      # ---- 回填后端发布记录 ---------------------------------------------------
-      - name: Backfill /admin/releases
-        if: ${{ github.event.inputs.testflight_url != '' }}
-        env:
-          API_BASE: ${{ secrets.V7_API_BASE }}
-          ADMIN_USER: ${{ secrets.V7_ADMIN_USER }}
-          ADMIN_PASS: ${{ secrets.V7_ADMIN_PASS }}
-          TF_URL: ${{ github.event.inputs.testflight_url }}
-          CHANNEL: ${{ github.event.inputs.channel }}
-        run: |
-          set -euo pipefail
-          TOKEN=$(curl -fsS -X POST "$API_BASE/api/v1/auth/login" \
-            -H 'Content-Type: application/json' \
-            -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\",\"device_name\":\"ci-ios-release\"}" \
-            | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["token"])')
-          curl -fsS -X POST "$API_BASE/api/v1/admin/releases" \
-            -H "Authorization: Bearer $TOKEN" \
-            -H 'Content-Type: application/json' \
-            -d "{\"platform\":\"ios\",\"version\":\"$VERSION\",\"version_code\":$BUILD_NUMBER,\"channel\":\"$CHANNEL\",\"download_url\":\"$TF_URL\",\"release_notes\":\"iOS $VERSION (build $BUILD_NUMBER) via TestFlight\"}"
-          echo "backfilled release ios $VERSION ($BUILD_NUMBER)"
-
-      - name: Cleanup keychain
-        if: always()
-        run: security delete-keychain "$KEYCHAIN" || true

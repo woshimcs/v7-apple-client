@@ -14,18 +14,20 @@
 | 4 | `SFI/Assets.xcassets/AppIcon.appiconset/*.png`（19 个尺寸） | 全部 PNG | 替换为 **Veylo 品牌图标**（蓝色 V + swoosh，白底，不透明无 alpha）。源自桌面端 `v7-win-pc/src-tauri/icons/ios/AppIcon-512@2x.png`（1024 官方图标）按各尺寸重采样。`Contents.json` 结构不变，仅替换位图，故无需改 JSON。**注**：二进制无法携带注释，仅此登记。 | 2026-06-23 | feat/branding-veylo |
 | 5 | `MacLibrary/Assets.xcassets/AppIcon.appiconset/*.png`（10 个尺寸） | 全部 PNG | 同 #4 来源，铺到 macOS（SFM）图标集，三端图标统一。`Contents.json` 不变。 | 2026-06-23 | feat/branding-veylo |
 | 6 | `WidgetExtension/Assets.xcassets/AppIcon.appiconset/`（`Contents.json` + 新增 `AppIcon-1024.png`） | universal/ios 1024 槽 | 单尺寸图标集补 1024 位图并在 `Contents.json` 的默认槽填 `filename`（dark/tinted 槽留空由 Xcode 派生）。源同 #4。 | 2026-06-23 | feat/branding-veylo |
+| 7 | `SFI/Application.swift` | `Application.body` | 未登录显示 `V7LoginView`，已登录进上游 `MainView`，并拉 session。 | 2026-10-06 | feat/ios-testflight |
+| 8 | `SFI/Info.plist` | `V7_API_BASE` | 注入 `$(V7_API_BASE)`，工程默认 `https://veylo.link`。 | 2026-10-06 | feat/ios-testflight |
+| 9 | `SFI/SFI.entitlements`、`Extension/Extension.entitlements` | NE + App Group | 只留 `packet-tunnel-provider` 与 `$(APP_GROUP_IDENTIFIER)`（`group.link.veylo.ios`）。去掉 iCloud / multicast，否则描述文件签不过。 | 2026-10-06 | feat/ios-testflight |
+| 10 | `Library/Shared/AppConfiguration.swift` | `extensionBundleID` | iOS 用 `link.veylo.ios.tunnel`，与门户 App ID 一致。 | 2026-10-06 | feat/ios-testflight |
+| 11 | `Library/Shared/Variant.swift` | `applicationName`（iOS） | VPN 配置显示名改为 Veylo。 | 2026-10-06 | feat/ios-testflight |
+| 12 | `Library/Database/Profile+RW.swift` | `writeAsync` | 改为 `public`，让 ApplicationLibrary 写入订阅配置。 | 2026-10-06 | feat/ios-testflight |
+| 13 | `sing-box.xcodeproj/project.pbxproj` | Team、SFI 显示名、Extension bundle、嵌入扩展 | Team `4534A24396`；SFI 显示名 Veylo；Extension 为 `.tunnel`；SFI 不再嵌入 Widget / File Provider / Intents（门户没有这几个 App ID）。 | 2026-10-06 | feat/ios-testflight |
 
 > 新增 V7 自有文件（不动上游，不入上表）：
 > - `V7/V7About.swift`（GPL 关于页草稿，PR `feat/branding-veylo`）。
-> - `V7/V7Backend.swift`、`V7/V7Keychain.swift`、`V7/V7Session.swift`、`V7/V7ConfigBuilder.swift`、
->   `V7/V7ProfileBridge.swift`、`V7/V7AppState.swift`、`V7/V7LoginView.swift`（接后端实现，PR `feat/backend-integration`）。
-> - `.github/workflows/release-ios.yml`（发版 CI，同上 PR；本仓 public，macOS runner 免费）。
+> - `ApplicationLibrary/V7/`（登录、session、1.12+ 配置、profile 桥）。由同步目录编进 ApplicationLibrary。
+> - `.github/workflows/release-ios.yml`（TestFlight CI，`macos-15` + Xcode 16.4，Libbox 取 sing-box v1.14.0）。
 >
-> **Mac 落地**（详见 `docs/BACKEND_INTEGRATION.md §9.B`）：
-> - 上述 `V7/*.swift` 需在 Xcode 加入 SFI / ApplicationLibrary target 的 Compile Sources；
->   `V7ProfileBridge` 需链接 `Library` + `Libbox`。
-> - **待落侵入点**：`SFI/Info.plist` 增 `V7_API_BASE` = `$(V7_API_BASE)`（运行时读后端地址，CI 已传值）；
->   挂 `V7LoginView` 闸门、把上游「连接」改接 `V7AppState`。真改 Info.plist 时移到上表并加 `// MODIFIED-BY-V7`。
+> 登录闸门、`V7_API_BASE`、entitlements 已落在上表 #7–#13。连接仍用上游按钮；登录成功后会把第一条可导出订阅写成本地 profile。
 
 ## 待办（计划中的侵入点，落地时回填上表）
 

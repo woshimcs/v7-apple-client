@@ -9,6 +9,8 @@
 	<string>$(BASE_PACKAGE_IDENTIFIER)</string>
 	<key>AppGroupIdentifier</key>
 	<string>$(APP_GROUP_IDENTIFIER)</string>
+	<key>V7_API_BASE</key>
+	<string>$(V7_API_BASE)</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>$(BASE_PACKAGE_IDENTIFIER).update_profiles</string>

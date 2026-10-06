@@ -41,7 +41,7 @@ public struct V7ExportLinks: Decodable {
 }
 
 public struct V7Subscription: Decodable, Identifiable {
-    public let id: String
+    public let id: Int
     public let name: String
     public let slug: String?
     public let status: String          // normal | expired | revoked

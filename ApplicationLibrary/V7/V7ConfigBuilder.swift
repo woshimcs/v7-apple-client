@@ -1,12 +1,10 @@
 import Foundation
 
-/// 把后端 `/export/singbox`（仅 outbounds + 顶层 version/log/dns）包成 NE 可直接跑的完整 sing-box 配置。
+/// 把后端 `/export/singbox` 包成 NE 可直接跑的完整 sing-box 配置。
 ///
-/// 后端不下发 inbounds/route（见 docs/BACKEND_INTEGRATION.md §4/§7），客户端负责补：
-///   1) 去顶层 `version`（libbox 版本由扩展决定）；
-///   2) 加 `tun` inbound（NE 提供 utun，libbox 接管）；
-///   3) 加 `route` 规则（bypass 直连来自 /me/session 的 proxy_config，final 走主代理）；
-///   4) 保留/改造 DNS。
+/// 现网导出已是 sing-box 1.12+（typed DNS、`default_domain_resolver`、selector `proxy`）。
+/// 1.12 起内核拒绝 `{ tag, address }` DNS 和 `type: dns` 出站。
+/// 客户端补 TUN inbound，并在后端 route 上追加直连规则，不改写 DNS 形态。
 ///
 /// 纯 Foundation，无上游依赖，可独立编译与单测。配置合法性校验交由调用方(V7ProfileBridge)用 LibboxCheckConfig。
 public enum V7ConfigBuilder {
@@ -75,7 +73,7 @@ public enum V7ConfigBuilder {
             "stack": "system",
         ] as [String: Any]]
 
-        // 3) route：bypass 直连 + final 走主代理
+        // 3) route：保留后端的 default_domain_resolver，再追加直连规则
         var rules: [[String: Any]] = []
         if !bypass.directDomainSuffix.isEmpty {
             rules.append(["domain_suffix": bypass.directDomainSuffix, "outbound": "direct"])
@@ -83,24 +81,29 @@ public enum V7ConfigBuilder {
         if !bypass.directIPCIDR.isEmpty {
             rules.append(["ip_cidr": bypass.directIPCIDR, "outbound": "direct"])
         }
-        // 私网直连（避免把局域网流量也代理）
         rules.append(["ip_is_private": true, "outbound": "direct"])
         let finalTag = firstProxyTag(outbounds) ?? "direct"
-        cfg["route"] = [
+        let existingRoute = export["route"] as? [String: Any]
+        var route: [String: Any] = [
             "rules": rules,
             "final": finalTag,
             "auto_detect_interface": true,
-        ] as [String: Any]
+        ]
+        if let resolver = existingRoute?["default_domain_resolver"] {
+            route["default_domain_resolver"] = resolver
+        } else {
+            route["default_domain_resolver"] = ["server": "dns-direct"]
+        }
+        cfg["route"] = route
 
-        // 4) DNS：保留后端给的；缺省给一个安全默认
+        // 4) DNS：沿用后端 1.12+ 写法。缺省时也用 typed server，不用旧的 { tag, address }
         if cfg["dns"] == nil {
             cfg["dns"] = [
-                "servers": [["tag": "google", "address": "tls://8.8.8.8"]],
-                "strategy": "prefer_ipv4",
+                "servers": [["type": "udp", "tag": "dns-direct", "server": "223.5.5.5"]],
+                "final": "dns-direct",
             ] as [String: Any]
         }
 
-        // 确保存在 direct / dns 出站（导出已含，缺则补）
         cfg["outbounds"] = ensureBaseOutbounds(outbounds)
 
         do {
@@ -133,9 +136,6 @@ public enum V7ConfigBuilder {
         let types = Set(outbounds.compactMap { $0["type"] as? String })
         if !types.contains("direct") {
             result.append(["type": "direct", "tag": "direct"])
-        }
-        if !types.contains("dns") {
-            result.append(["type": "dns", "tag": "dns-out"])
         }
         return result
     }

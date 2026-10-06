@@ -52,8 +52,8 @@ public enum V7Backend {
         authed: Bool = true,
         etag: String? = nil
     ) async throws -> (value: T, etag: String?, notModified: Bool) {
-        guard let base = baseURL else { throw V7Error.notConfigured }
-        var req = URLRequest(url: base.appendingPathComponent(path))
+        guard let url = try makeURL(path) else { throw V7Error.notConfigured }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let etag { req.setValue("\"\(etag)\"", forHTTPHeaderField: "If-None-Match") }
@@ -93,6 +93,14 @@ public enum V7Backend {
     }
 
     struct EmptyBody: Encodable {}
+
+    /// path 以 `/api/...` 开头，可带 query。不能用 appendingPathComponent，它会把 `/` 编成 %2F。
+    private static func makeURL(_ path: String) throws -> URL? {
+        guard let base = baseURL else { throw V7Error.notConfigured }
+        let root = base.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let rel = path.hasPrefix("/") ? path : "/" + path
+        return URL(string: root + rel)
+    }
 }
 
 /// 304 信号：调用方据此保留缓存值。

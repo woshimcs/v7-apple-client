@@ -38,7 +38,8 @@ public extension Profile {
         }
     }
 
-    func writeAsync(_ content: String) async throws {
+    // MODIFIED-BY-V7: ApplicationLibrary 要写入 Veylo 订阅配置
+    public func writeAsync(_ content: String) async throws {
         let type = type
         let path = path
         let content = content
