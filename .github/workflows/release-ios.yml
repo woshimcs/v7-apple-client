@@ -34,7 +34,7 @@ on:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 120
     env:
       VERSION: ${{ inputs.version || '1.0.0' }}
@@ -48,8 +48,13 @@ jobs:
           ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.sha }}
           submodules: recursive
 
-      - name: Select Xcode 16.4
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          xcode="$(ls -d /Applications/Xcode_26*.app | sort -V | tail -n 1)"
+          echo "using $xcode"
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
 
       - name: Setup Go
         uses: actions/setup-go@v5
