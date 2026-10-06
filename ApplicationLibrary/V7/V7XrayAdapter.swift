@@ -116,7 +116,9 @@ public enum V7XrayAdapter {
             if let alpn = tls["alpn"] as? [String], !alpn.isEmpty { block["alpn"] = alpn }
             outbound["tls"] = block
         } else if security == "reality", let reality = stream["realitySettings"] as? [String: Any] {
-            var block: [String: Any] = [
+            // Veylo 核的 reality 只有 public_key / short_id。多写 spider_x 会让整份配置被拒绝。
+            // 已接通的 REALITY 线路在官方 sing-box 上同样不带这个字段。
+            outbound["tls"] = [
                 "enabled": true,
                 "server_name": (reality["serverName"] as? String) ?? "",
                 "utls": ["enabled": true, "fingerprint": (reality["fingerprint"] as? String) ?? "chrome"],
@@ -126,12 +128,6 @@ public enum V7XrayAdapter {
                     "short_id": (reality["shortId"] as? String) ?? "",
                 ],
             ]
-            if let spx = reality["spiderX"] as? String, !spx.isEmpty {
-                var inner = block["reality"] as? [String: Any] ?? [:]
-                inner["spider_x"] = spx
-                block["reality"] = inner
-            }
-            outbound["tls"] = block
         }
     }
 
