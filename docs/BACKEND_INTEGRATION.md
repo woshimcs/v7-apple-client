@@ -344,13 +344,30 @@ enum V7ConfigBuilder {
 
 ## 9. 接入点清单（Mac 落地 checklist）
 
-- [ ] xcconfig / build setting 注入 `V7_API_BASE`（开发/生产分开），写进 Info.plist 供运行时读。
-- [ ] 新增 `V7/`：`V7Backend`、`V7Keychain`、`V7Session`、`V7ConfigBuilder`（草稿见 §8）。
-- [ ] `ApplicationLibrary` 根导航挂 V7 登录闸门：未登录 → 登录页；已登录 → 拉 session。
-- [ ] session `vpn_access.allowed=false` → 按 `client_actions` 断连 + 清节点 + 锁 UI + 提示。
-- [ ] profile 来源改为：选订阅 → 取 `export_links.singbox` → `V7ConfigBuilder.fetchExport` → `build` → 交 NE。
-- [ ] 强制升级：比对 `account.min_supported_version` 与本地 `MARKETING_VERSION`，低于则引导更新(TestFlight)。
-- [ ] 退出登录：`V7Keychain.clear()` + 停 NE。
-- [ ] 发版 CI（`release-ios.yml`）：archive → 上传 TestFlight → 回填 `POST /admin/releases`。
+> §8 的草稿已**提升为真实源文件**（见下「已落代码」）。§8 仅保留作为契约/思路注释；
+> 以仓库 `V7/` 下实际文件为准。剩余项需 **Mac + Xcode + NE entitlement** 落地，见 `docs/PREREQUISITES.md`。
 
-> 标 [ ] 项需 **Mac + Xcode + NE entitlement** 才能落地与验证，见 `docs/PREREQUISITES.md`。
+### A. 已落代码（PR `feat/backend-integration`，纯新增不动上游）
+
+- [x] `V7/V7Backend.swift`：envelope HTTP 客户端（`V7_API_BASE` from Info.plist、Bearer、ETag/304）。
+- [x] `V7/V7Keychain.swift`：Bearer 存取 Keychain。
+- [x] `V7/V7Session.swift`：login / session DTO + `V7Api.login/session/logout`。
+- [x] `V7/V7ConfigBuilder.swift`：导出(outbounds) → 补 TUN inbound + route(含 bypass) + DNS（纯函数，可单测）。
+- [x] `V7/V7ProfileBridge.swift`：拉导出 → `LibboxCheckConfig` 校验 → 写 `configs/config_<id>.json` local profile →
+      `SharedPreferences.selectedProfileID` → `ExtensionProfile.install/load/start/stop`。**复用上游 NE 通路，不自研。**
+- [x] `V7/V7AppState.swift`：登录态 + session 轮询(`next_poll_after_sec`) + `client_actions` 执行 + 强升级判定 + 连接编排。
+- [x] `V7/V7LoginView.swift`：SwiftUI 登录页。
+- [x] `.github/workflows/release-ios.yml`：archive(SFI) → export(app-store) → TestFlight → 回填 `/admin/releases`。
+
+### B. Mac 落地剩余（需 Xcode 工程操作 / 真机）
+
+- [ ] **加 target membership**：把 `V7/*.swift` 加入 SFI（及共享逻辑所在的 ApplicationLibrary）target 的 Compile Sources。
+      `V7ProfileBridge` 需链接 `Library` + `Libbox` 模块。
+- [ ] **Info.plist 注入 `V7_API_BASE`**：加 `<key>V7_API_BASE</key><string>$(V7_API_BASE)</string>`，
+      build setting / CI（workflow 已传 `V7_API_BASE=...`）注入值。**这步改 Info.plist → 落地时记 `V7_PATCHES.md`。**
+- [ ] **挂登录闸门**：`ApplicationLibrary` 根视图按 `V7AppState.shared.isLoggedIn` 切换 `V7LoginView` / 上游主界面。
+- [ ] **锁连接 UI**：`vpnAccessAllowed=false` 时禁用上游连接按钮，并展示 `denyReason` / 升级引导。
+- [ ] **连接改走 V7**：上游「连接」动作改调用 `V7AppState.connectFirstAvailable()`（内部 `V7ProfileBridge.syncAndStart`）。
+- [ ] **校验 sing-box 字段**：在真机上确认 `V7ConfigBuilder` 产出的 TUN inbound/route/DNS 与上游 NE 期望一致
+      （上游 `prepareStartOptions` 还会注入 `autoRouteUseSubRangesByDefault` 等，注意不要与配置内 route 冲突）。
+- [ ] **CI Secrets**：按 `docs/PREREQUISITES.md §5` 配齐 `APPLE_API_*` / `IOS_DIST_CERT_*` / `IOS_*PROVISION*` / `V7_ADMIN_*`。

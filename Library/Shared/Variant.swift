@@ -9,7 +9,8 @@ public enum Variant {
     #endif
 
     #if os(iOS)
-        public static let applicationName = "SFI"
+        // MODIFIED-BY-V7: VPN 配置名与主屏名用 Veylo
+        public static let applicationName = "Veylo"
     #elseif os(macOS)
         public static let applicationName = "SFM"
     #elseif os(tvOS)
