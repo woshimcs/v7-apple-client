@@ -82,7 +82,7 @@ public struct V7MePage: View {
                     }
                 }
                 Section {
-                    Text("版本 \(V7Version.marketing) · 内核 sing-box（GPL-3.0）")
+                    Text("版本 \(V7Version.marketing) · 自研内核")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

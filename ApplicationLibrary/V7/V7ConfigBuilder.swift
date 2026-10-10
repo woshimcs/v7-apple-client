@@ -93,7 +93,7 @@ public enum V7ConfigBuilder {
             switch core {
             case "xray": return "Xray"
             case "mihomo": return "mihomo"
-            default: return "sing-box"
+            default: return "Veylo"
             }
         }
         public init(subscriptionId: Int, subscriptionName: String, tag: String, type: String, region: String?, exportURL: String, xrayExportURL: String = "", cores: [String] = [], bestCore: String? = nil, singboxOK: Bool? = nil, singboxRunnable: Bool = true, core: String = "singbox") {
