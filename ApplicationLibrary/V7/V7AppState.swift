@@ -270,9 +270,7 @@ public final class V7AppState: ObservableObject {
     }
 
     public var selectedLineName: String {
-        guard let line = selectedLine else { return "点击选择线路" }
-        if let region = line.region, !region.isEmpty { return "\(region) · \(line.tag)" }
-        return line.tag
+        selectedLine?.tag ?? "点击选择线路"
     }
 
     public func probeLatency() async -> String {

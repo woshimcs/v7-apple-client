@@ -46,7 +46,7 @@ private struct V7ConnectPage: View {
                 lockedBody
             }
         }
-        .sheet(isPresented: $picking) {
+        .fullScreenCover(isPresented: $picking) {
             V7LinePicker(onPick: { tag in
                 picking = false
                 Task { await state.selectLine(tag) }
@@ -161,10 +161,65 @@ private struct V7ConnectPage: View {
 private struct V7LinePicker: View {
     @EnvironmentObject private var state: V7AppState
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedSubId: Int?
     let onPick: (String) -> Void
 
-    private var grouped: [String: [V7ConfigBuilder.Line]] {
-        Dictionary(grouping: state.lines, by: { $0.subscriptionName })
+    private struct SubGroup: Identifiable {
+        let id: Int
+        let name: String
+        let lines: [V7ConfigBuilder.Line]
+    }
+
+    private struct RegionGroup: Identifiable {
+        let title: String
+        let lines: [V7ConfigBuilder.Line]
+        var id: String { title }
+    }
+
+    /// 订阅顺序跟下发顺序，不按名字排序。
+    private var subscriptions: [SubGroup] {
+        var order: [Int] = []
+        var buckets: [Int: [V7ConfigBuilder.Line]] = [:]
+        for line in state.lines {
+            if buckets[line.subscriptionId] == nil { order.append(line.subscriptionId) }
+            buckets[line.subscriptionId, default: []].append(line)
+        }
+        return order.map { id in
+            let lines = buckets[id] ?? []
+            let name = lines.first?.subscriptionName ?? "订阅"
+            return SubGroup(id: id, name: name.isEmpty ? "订阅" : name, lines: lines)
+        }
+    }
+
+    private var activeSub: SubGroup? {
+        if let selectedSubId, let found = subscriptions.first(where: { $0.id == selectedSubId }) {
+            return found
+        }
+        if let current = state.selectedLine?.subscriptionId,
+           let found = subscriptions.first(where: { $0.id == current }) {
+            return found
+        }
+        return subscriptions.first
+    }
+
+    /// 地区组跟线路出现顺序。没有地区的放在最后。
+    private var regions: [RegionGroup] {
+        guard let lines = activeSub?.lines else { return [] }
+        var order: [String] = []
+        var buckets: [String: [V7ConfigBuilder.Line]] = [:]
+        var other: [V7ConfigBuilder.Line] = []
+        for line in lines {
+            let region = line.region?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if region.isEmpty {
+                other.append(line)
+                continue
+            }
+            if buckets[region] == nil { order.append(region) }
+            buckets[region, default: []].append(line)
+        }
+        var groups = order.map { RegionGroup(title: $0, lines: buckets[$0] ?? []) }
+        if !other.isEmpty { groups.append(RegionGroup(title: "其他", lines: other)) }
+        return groups
     }
 
     var body: some View {
@@ -178,33 +233,27 @@ private struct V7LinePicker: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    List {
-                        ForEach(grouped.keys.sorted(), id: \.self) { name in
-                            Section(name) {
-                                ForEach(grouped[name] ?? []) { line in
-                                    Button {
-                                        onPick(line.id)
-                                    } label: {
-                                        HStack {
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(line.region ?? line.tag).foregroundStyle(line.veyloRunnable ? .primary : .secondary)
-                                                Text(line.veyloRunnable ? (line.singboxRunnable ? (line.region == nil ? line.type : line.tag) : "Veylo") : "需要 \(line.coreLabel)")
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                            Spacer()
-                                            if line.id == state.selectedLineId {
-                                                Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                                            }
-                                        }
+                    VStack(spacing: 0) {
+                        if subscriptions.count > 1 {
+                            subscriptionTabs
+                        }
+                        List {
+                            ForEach(regions) { group in
+                                Section {
+                                    ForEach(group.lines) { line in
+                                        lineRow(line)
                                     }
+                                } header: {
+                                    Text(group.title)
                                 }
                             }
                         }
+                        .listStyle(.insetGrouped)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
             }
-            .navigationTitle("选择线路")
+            .navigationTitle(subscriptions.count > 1 ? "订阅" : (activeSub?.name ?? "订阅"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -214,5 +263,56 @@ private struct V7LinePicker: View {
             .refreshable { await state.syncCatalog() }
         }
         .navigationViewStyle(.stack)
+    }
+
+    private var subscriptionTabs: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 20) {
+                ForEach(subscriptions) { sub in
+                    let selected = sub.id == activeSub?.id
+                    Button {
+                        selectedSubId = sub.id
+                    } label: {
+                        VStack(spacing: 8) {
+                            Text(sub.name)
+                                .font(.subheadline.weight(selected ? .semibold : .regular))
+                                .foregroundStyle(selected ? Color.primary : Color.secondary)
+                                .lineLimit(1)
+                            Rectangle()
+                                .fill(selected ? Color.accentColor : Color.clear)
+                                .frame(height: 2)
+                        }
+                        .padding(.top, 12)
+                        .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 20)
+        }
+    }
+
+    private func lineRow(_ line: V7ConfigBuilder.Line) -> some View {
+        let selected = line.id == state.selectedLineId
+        return Button {
+            onPick(line.id)
+        } label: {
+            HStack(spacing: 12) {
+                Text(line.tag)
+                    .font(.body)
+                    .foregroundStyle(line.veyloRunnable ? Color.primary : Color.secondary)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 12)
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color(.secondarySystemGroupedBackground))
     }
 }
