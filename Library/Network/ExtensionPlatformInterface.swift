@@ -555,6 +555,28 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
         #endif
     }
 
+    // MODIFIED-BY-V7: sing-box v1.14.0 libbox requires these; iOS TestFlight does not use bridge.
+    public func cancelNotification(_ identifier: String?, typeID _: Int32) throws {
+        #if !os(tvOS)
+            guard let identifier else {
+                return
+            }
+            let center = UNUserNotificationCenter.current()
+            center.removePendingNotificationRequests(withIdentifiers: [identifier])
+            center.removeDeliveredNotifications(withIdentifiers: [identifier])
+        #endif
+    }
+
+    public func usePlatformBridge() -> Bool {
+        false
+    }
+
+    public func createBridge(_: LibboxBridgeOptions?) throws -> any LibboxBridgeSessionProtocol {
+        throw NSError(domain: "ExtensionPlatformInterface", code: -1, userInfo: [
+            NSLocalizedDescriptionKey: "bridge is not supported on this platform",
+        ])
+    }
+
     #if os(macOS)
         private var neighborCallbackListener: NSXPCListener?
         private var neighborCallbackHandler: NeighborCallbackHandler?

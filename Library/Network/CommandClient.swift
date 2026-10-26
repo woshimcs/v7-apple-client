@@ -485,6 +485,9 @@ public class CommandClient: ObservableObject {
             }
         }
 
+        // MODIFIED-BY-V7: veylo-core 把 WriteDNSQuery 导成 write(_:)（参数是 LibboxDnsQuery）。首页不用它。
+        func write(_ query: LibboxDnsQuery?) {}
+
         func write(_ events: LibboxConnectionEvents?) {
             guard let events else {
                 return

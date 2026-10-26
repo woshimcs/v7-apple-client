@@ -22,8 +22,14 @@ public enum AppConfiguration {
         return String(appGroupID[..<dotIndex])
     }
 
+    // MODIFIED-BY-V7: iOS 扩展 Bundle ID 对齐门户 link.veylo.ios.tunnel
     public static var extensionBundleID: String {
-        "\(packageName).extension"
+        #if os(iOS)
+            // 门户 App ID 是 link.veylo.ios.tunnel，不是上游的 .extension
+            return "\(packageName).tunnel"
+        #else
+            return "\(packageName).extension"
+        #endif
     }
 
     public static var systemExtensionBundleID: String {

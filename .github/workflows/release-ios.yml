@@ -1,0 +1,217 @@
+# Veylo iOS → TestFlight.
+# Libbox 用 Veylo 隧道核：sing-box-lx（官方 sing-box + xhttp）。导出格式对齐现网 1.12+。
+# 直接在本仓跑需要 APPLE_API_* secrets。桌面仓 v7-win-pc 已有这三把钥匙，
+# 用 workflow_call 把它们传进来，避免把密钥再复制一份。
+name: release-ios
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "MARKETING_VERSION，与 V7Version.marketing 一致"
+        required: false
+        default: "1.0.2"
+      git_ref:
+        description: "要编的 v7-apple-client ref，留空=当前提交"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: false
+        default: "1.0.2"
+      git_ref:
+        type: string
+        required: true
+    secrets:
+      APPLE_API_KEY_ID:
+        required: true
+      APPLE_API_ISSUER:
+        required: true
+      APPLE_API_KEY_P8:
+        required: true
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 120
+    env:
+      VERSION: ${{ inputs.version || '1.0.0' }}
+      TEAM_ID: "4534A24396"
+      BUNDLE_ID: link.veylo.ios
+    steps:
+      - name: Checkout v7-apple-client
+        uses: actions/checkout@v4
+        with:
+          repository: woshimcs/v7-apple-client
+          ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.sha }}
+          submodules: recursive
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          xcode="$(ls -d /Applications/Xcode_26*.app | sort -V | tail -n 1)"
+          echo "using $xcode"
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+
+      - name: Build Libbox.xcframework (veylo-core, iOS)
+        run: |
+          set -euo pipefail
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          gomobile init
+          git clone --depth 1 --branch veylo-1.0.1 https://github.com/woshimcs/veylo-core.git sing-box-src
+          sh sing-box-src/release/fetch-deps.sh
+          (
+            cd sing-box-src
+            go run ./cmd/internal/build_libbox -target apple -platform ios
+          )
+          rm -rf Libbox.xcframework
+          mv sing-box-src/Libbox.xcframework Libbox.xcframework
+          # gomobile 有时打出 macOS 风格的 Versions/A，iOS 设备切片要摊平
+          for framework in Libbox.xcframework/ios-*/Libbox.framework; do
+            if [ -d "$framework/Versions/A" ]; then
+              shallow="${framework}.shallow"
+              rm -rf "$shallow"
+              ditto "$framework/Versions/A" "$shallow"
+              rm -rf "$framework"
+              mv "$shallow" "$framework"
+            fi
+          done
+          test -d Libbox.xcframework
+
+      - name: Import App Store Connect API key
+        env:
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          API_KEY_P8_B64: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/appstore_private_keys"
+          echo "$API_KEY_P8_B64" | base64 --decode > "$RUNNER_TEMP/appstore_private_keys/AuthKey_${API_KEY_ID}.p8"
+          echo "API_KEY_PATH=$RUNNER_TEMP/appstore_private_keys/AuthKey_${API_KEY_ID}.p8" >> "$GITHUB_ENV"
+          echo "API_KEY_ID=$API_KEY_ID" >> "$GITHUB_ENV"
+          echo "API_ISSUER=$API_ISSUER" >> "$GITHUB_ENV"
+
+      - name: Ensure App Store Connect app record
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+
+          def b64url(data: bytes) -> str:
+              return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+          def der_to_raw(der: bytes) -> bytes:
+              if der[0] != 0x30:
+                  raise SystemExit("openssl signature was not DER")
+              i = 2
+              if der[1] & 0x80:
+                  i = 2 + (der[1] & 0x7F)
+              def read_int(buf, idx):
+                  if buf[idx] != 0x02:
+                      raise SystemExit("bad DER integer")
+                  ln = buf[idx + 1]
+                  val = buf[idx + 2:idx + 2 + ln]
+                  if len(val) > 32:
+                      val = val[-32:]
+                  return val.rjust(32, b"\x00"), idx + 2 + ln
+              r, i = read_int(der, i)
+              s, _ = read_int(der, i)
+              return r + s
+
+          now = int(time.time())
+          header = b64url(json.dumps({"alg": "ES256", "kid": os.environ["API_KEY_ID"], "typ": "JWT"}, separators=(",", ":")).encode())
+          payload = b64url(json.dumps({
+              "iss": os.environ["API_ISSUER"],
+              "iat": now,
+              "exp": now + 1200,
+              "aud": "appstoreconnect-v1",
+          }, separators=(",", ":")).encode())
+          signing_input = f"{header}.{payload}".encode()
+          der = subprocess.check_output(["openssl", "dgst", "-sha256", "-sign", os.environ["API_KEY_PATH"]], input=signing_input)
+          token = f"{header}.{payload}.{b64url(der_to_raw(der))}"
+
+          def api(method, path, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              req = urllib.request.Request(
+                  "https://api.appstoreconnect.apple.com" + path,
+                  data=data,
+                  method=method,
+                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+              )
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      return resp.status, json.load(resp)
+              except urllib.error.HTTPError as e:
+                  raw = e.read().decode("utf-8", "replace")
+                  print(f"HTTP {e.code} {method} {path}")
+                  print(raw[:2000])
+                  return e.code, None
+
+          bundle = os.environ["BUNDLE_ID"]
+          q = urllib.parse.urlencode({"filter[bundleId]": bundle, "limit": "1"})
+          code, found = api("GET", "/v1/apps?" + q)
+          if code == 200 and found and found.get("data"):
+              print("app already exists", found["data"][0]["id"])
+              sys.exit(0)
+          code, created = api("POST", "/v1/apps", {
+              "data": {
+                  "type": "apps",
+                  "attributes": {
+                      "bundleId": bundle,
+                      "name": "Veylo",
+                      "primaryLocale": "zh-Hans",
+                      "sku": "veylo-ios",
+                  },
+              },
+          })
+          if code == 201:
+              print("created app", created["data"]["id"])
+              sys.exit(0)
+          if code == 409:
+              print("app already exists")
+              sys.exit(0)
+          sys.exit(1)
+          PY
+
+      - name: Archive SFI
+        run: |
+          set -euo pipefail
+          rm -rf build/SFI.xcarchive
+          xcodebuild archive \
+            -scheme SFI \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/SFI.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$API_KEY_ID" \
+            -authenticationKeyIssuerID "$API_ISSUER" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            V7_API_BASE="https://veylo.link" \
+            | xcbeautify
+
+      - name: Upload to TestFlight
+        run: |
+          set -euo pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/SFI.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist SFI/Upload.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$API_KEY_PATH" \
+            -authenticationKeyID "$API_KEY_ID" \
+            -authenticationKeyIssuerID "$API_ISSUER" \
+            | xcbeautify
