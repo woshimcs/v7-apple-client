@@ -22,16 +22,30 @@ public enum V7ConfigBuilder {
     }
 
     /// proxy_config 的 bypass 输入（字段名容错：兼容后端 proxyRoutingService 的常见命名）。
+    ///
+    /// `ipv6Mode` 对齐安卓 CF-16 / collections#198：
+    /// - `block`：私网之后拒绝全部 IPv6，DNS `ipv4_only`（缺省）
+    /// - `block_foreign`：域名和 IP 直连之后再拒绝其余 IPv6，DNS `prefer_ipv4`
+    /// - `tunnel`：不拒绝，IPv6 进代理
     public struct BypassRules {
         public var directDomainSuffix: [String]
         public var directDomain: [String]
         public var directDomainKeyword: [String]
         public var directIPCIDR: [String]
-        public init(directDomainSuffix: [String] = [], directDomain: [String] = [], directDomainKeyword: [String] = [], directIPCIDR: [String] = []) {
+        public var ipv6Mode: String
+        public init(directDomainSuffix: [String] = [], directDomain: [String] = [], directDomainKeyword: [String] = [], directIPCIDR: [String] = [], ipv6Mode: String? = "block") {
             self.directDomainSuffix = directDomainSuffix
             self.directDomain = directDomain
             self.directDomainKeyword = directDomainKeyword
             self.directIPCIDR = directIPCIDR
+            self.ipv6Mode = Self.normalizeIpv6Mode(ipv6Mode)
+        }
+
+        public static func normalizeIpv6Mode(_ raw: String?) -> String {
+            switch raw {
+            case "block", "block_foreign", "tunnel": return raw ?? "block"
+            default: return "block"
+            }
         }
 
         /// 从 /me/proxy-config 宽松解析。键名与安卓 ProxyConfigDto 一致。
@@ -47,7 +61,8 @@ public enum V7ConfigBuilder {
                 directDomainSuffix: strs(["domain_suffix", "direct_domains", "bypass_domains", "direct_domain_suffix"]),
                 directDomain: strs(["domain"]),
                 directDomainKeyword: strs(["domain_keyword"]),
-                directIPCIDR: strs(["ip_cidr", "direct_ip_cidr", "bypass_ip_cidr", "direct_ips"])
+                directIPCIDR: strs(["ip_cidr", "direct_ip_cidr", "bypass_ip_cidr", "direct_ips"]),
+                ipv6Mode: proxy["ipv6_mode"] as? String
             )
         }
 
@@ -57,6 +72,7 @@ public enum V7ConfigBuilder {
                 "domain": directDomain,
                 "domain_keyword": directDomainKeyword,
                 "ip_cidr": directIPCIDR,
+                "ipv6_mode": ipv6Mode,
             ]
         }
     }
@@ -161,21 +177,8 @@ public enum V7ConfigBuilder {
             "stack": "system",
         ] as [String: Any]]
 
-        // 3) route：保留后端的 default_domain_resolver，再追加直连规则
-        var rules: [[String: Any]] = []
-        if !bypass.directDomainSuffix.isEmpty {
-            rules.append(["domain_suffix": bypass.directDomainSuffix, "outbound": "direct"])
-        }
-        if !bypass.directDomain.isEmpty {
-            rules.append(["domain": bypass.directDomain, "outbound": "direct"])
-        }
-        if !bypass.directDomainKeyword.isEmpty {
-            rules.append(["domain_keyword": bypass.directDomainKeyword, "outbound": "direct"])
-        }
-        if !bypass.directIPCIDR.isEmpty {
-            rules.append(["ip_cidr": bypass.directIPCIDR, "outbound": "direct"])
-        }
-        rules.append(["ip_is_private": true, "outbound": "direct"])
+        // 3) route：保留后端的 default_domain_resolver，再按 ipv6_mode 追加直连 / 拒绝
+        let rules = routeRules(bypass)
         let finalTag = firstProxyTag(outbounds) ?? "direct"
         let existingRoute = export["route"] as? [String: Any]
         var route: [String: Any] = [
@@ -191,10 +194,16 @@ public enum V7ConfigBuilder {
         cfg["route"] = route
 
         // 4) DNS：沿用后端 1.12+ 写法。缺省时也用 typed server，不用旧的 { tag, address }
-        if cfg["dns"] == nil {
+        // block 只解析 A，微信退回 IPv4；block_foreign / tunnel 仍优先 A，国内域名的 AAAA 可以直连。
+        let dnsStrategy = bypass.ipv6Mode == "block" ? "ipv4_only" : "prefer_ipv4"
+        if var dns = cfg["dns"] as? [String: Any] {
+            dns["strategy"] = dnsStrategy
+            cfg["dns"] = dns
+        } else if cfg["dns"] == nil {
             cfg["dns"] = [
                 "servers": [["type": "udp", "tag": "dns-direct", "server": "223.5.5.5"]],
                 "final": "dns-direct",
+                "strategy": dnsStrategy,
             ] as [String: Any]
         }
 
@@ -215,6 +224,43 @@ public enum V7ConfigBuilder {
     }
 
     // MARK: - helpers
+
+    /// 规则顺序与安卓 `V7SingBoxConfig.buildRoute` 一致。
+    /// `block` 先拒绝 IPv6，避免微信发图的 IPv6 被送进只有 IPv4 的节点。
+    /// `block_foreign` 先放行已直连的国内目标（含其 IPv6），再拒绝其余 IPv6。
+    private static func routeRules(_ bypass: BypassRules) -> [[String: Any]] {
+        let rejectIPv6: [String: Any] = ["ip_version": 6, "action": "reject", "method": "default"]
+        var rules: [[String: Any]] = []
+        if bypass.ipv6Mode == "block" {
+            rules.append(["ip_is_private": true, "outbound": "direct"])
+            rules.append(rejectIPv6)
+            rules.append(contentsOf: directTargetRules(bypass))
+            return rules
+        }
+        rules.append(contentsOf: directTargetRules(bypass))
+        rules.append(["ip_is_private": true, "outbound": "direct"])
+        if bypass.ipv6Mode == "block_foreign" {
+            rules.append(rejectIPv6)
+        }
+        return rules
+    }
+
+    private static func directTargetRules(_ bypass: BypassRules) -> [[String: Any]] {
+        var rules: [[String: Any]] = []
+        if !bypass.directDomainSuffix.isEmpty {
+            rules.append(["domain_suffix": bypass.directDomainSuffix, "outbound": "direct"])
+        }
+        if !bypass.directDomain.isEmpty {
+            rules.append(["domain": bypass.directDomain, "outbound": "direct"])
+        }
+        if !bypass.directDomainKeyword.isEmpty {
+            rules.append(["domain_keyword": bypass.directDomainKeyword, "outbound": "direct"])
+        }
+        if !bypass.directIPCIDR.isEmpty {
+            rules.append(["ip_cidr": bypass.directIPCIDR, "outbound": "direct"])
+        }
+        return rules
+    }
 
     private static func firstProxyTag(_ outbounds: [[String: Any]]) -> String? {
         let skip: Set<String> = ["direct", "dns", "block", "selector", "urltest"]
