@@ -26,6 +26,7 @@
 		3A5F26C92A503D4A00C27EDF /* Library.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 3AEC211D2A459B4700A63465 /* Library.framework */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		3A648D542A4EF4C700D95A12 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3AF342B12A4AA520002B34AC /* NetworkExtension.framework */; };
 		3A76504C2A4F08BA003945C5 /* Libbox.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3AEC20DB2A4599D000A63465 /* Libbox.xcframework */; };
+		A1E108000000000000000001 /* VeyloEngine.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1E108000000000000000002 /* VeyloEngine.xcframework */; };
 		3A7B322C2FDE1D54008C0F7F /* Library.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3AEC211D2A459B4700A63465 /* Library.framework */; };
 		3A7E90382A46778E00D53052 /* BinaryCodable in Frameworks */ = {isa = PBXBuildFile; productRef = 3A7E90372A46778E00D53052 /* BinaryCodable */; };
 		3A8655142A4FA26600B7181F /* IntentsExtension.appex in Embed ExtensionKit Extensions */ = {isa = PBXBuildFile; fileRef = 3A77016D2A4E6B34008F031F /* IntentsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -476,6 +477,7 @@
 		3AE595AE2F08D00000C13426 /* HelperService/LaunchDaemons/io.nekohasekai.sfavt.helper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = HelperService/LaunchDaemons/io.nekohasekai.sfavt.helper.plist; sourceTree = "<group>"; };
 		3AE595AF2F08D00000C13426 /* UserHelper/LaunchAgents/io.nekohasekai.sfavt.userhelper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = UserHelper/LaunchAgents/io.nekohasekai.sfavt.userhelper.plist; sourceTree = "<group>"; };
 		3AEC20DB2A4599D000A63465 /* Libbox.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = Libbox.xcframework; sourceTree = "<group>"; };
+		A1E108000000000000000002 /* VeyloEngine.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = VeyloEngine.xcframework; sourceTree = "<group>"; };
 		3AEC20F32A459AB400A63465 /* sing-box.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "sing-box.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3AEC21092A459B1900A63465 /* sing-box.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "sing-box.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3AEC211D2A459B4700A63465 /* Library.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Library.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -780,6 +782,7 @@
 				3AFE19402EF5677100F61E06 /* SystemConfiguration.framework in Frameworks */,
 				3AF6A0012FEF0001000A0001 /* IOUSBHost.framework in Frameworks */,
 				3A76504C2A4F08BA003945C5 /* Libbox.xcframework in Frameworks */,
+				A1E108000000000000000001 /* VeyloEngine.xcframework in Frameworks */,
 				3A5AA1BA2F7DB10900BA2A0D /* CrashReporter in Frameworks */,
 				3AC89DD52FCD9E3B002A14E8 /* DeviceKit in Frameworks */,
 				3A7E90382A46778E00D53052 /* BinaryCodable in Frameworks */,
@@ -831,6 +834,7 @@
 			children = (
 				9C37F17C2C131100001B9FA8 /* Localizable.xcstrings */,
 				3AEC20DB2A4599D000A63465 /* Libbox.xcframework */,
+				A1E108000000000000000002 /* VeyloEngine.xcframework */,
 				3ADDCEB42E8B723B009ACE1D /* SFI */,
 				3ADDCEC02E8B7240009ACE1D /* SFM */,
 				3ADDCEC92E8B7243009ACE1D /* SFM.System */,

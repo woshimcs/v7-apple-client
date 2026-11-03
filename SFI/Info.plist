@@ -5,6 +5,8 @@
 	<!-- MODIFIED-BY-V7: 品牌化 App 显示名为 Veylo（覆盖 PRODUCT_NAME 默认） -->
 	<key>CFBundleDisplayName</key>
 	<string>Veylo</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>BasePackageIdentifier</key>
 	<string>$(BASE_PACKAGE_IDENTIFIER)</string>
 	<key>AppGroupIdentifier</key>

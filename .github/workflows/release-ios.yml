@@ -31,6 +31,8 @@ on:
         required: true
       APPLE_API_KEY_P8:
         required: true
+      VEYLO_ENGINE_DEPLOY_KEY:
+        required: true
 
 jobs:
   release:
@@ -87,6 +89,41 @@ jobs:
             fi
           done
           test -d Libbox.xcframework
+
+      - name: Setup Go 1.27 for veylo-engine
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.1"
+          cache: false
+
+      - name: Bind VeyloEngine.xcframework
+        uses: actions/checkout@v4
+        with:
+          repository: woshimcs/veylo-engine
+          ref: 1f9a8cb1d3de12fa4970627662162cba100c8bc0
+          path: veylo-engine
+          ssh-key: ${{ secrets.VEYLO_ENGINE_DEPLOY_KEY }}
+
+      - name: Build VeyloEngine.xcframework
+        working-directory: veylo-engine
+        run: |
+          set -euo pipefail
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          go get golang.org/x/mobile@latest
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          gomobile init
+          gomobile bind -target ios -o "$GITHUB_WORKSPACE/VeyloEngine.xcframework" ./mobile
+          for framework in "$GITHUB_WORKSPACE"/VeyloEngine.xcframework/ios-*/VeyloEngine.framework; do
+            if [ -d "$framework/Versions/A" ]; then
+              shallow="${framework}.shallow"
+              rm -rf "$shallow"
+              ditto "$framework/Versions/A" "$shallow"
+              rm -rf "$framework"
+              mv "$shallow" "$framework"
+            fi
+          done
+          test -d "$GITHUB_WORKSPACE/VeyloEngine.xcframework"
 
       - name: Import App Store Connect API key
         env:
