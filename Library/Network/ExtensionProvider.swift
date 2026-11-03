@@ -3,8 +3,6 @@ import Libbox
 import NetworkExtension
 import os.log
 #if os(iOS)
-    import Darwin
-    import VeyloEngine
     import WidgetKit
 #endif
 #if os(macOS)
@@ -18,10 +16,6 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     private lazy var platformInterface = ExtensionPlatformInterface(self)
     public var tunnelOptions: [String: NSObject]?
     private var startOptionsURL: URL?
-    #if os(iOS)
-        private var veyloTunnel: VeyloBound?
-        private var veyloReading = false
-    #endif
 
     public struct OverridePreferences {
         public var includeAllNetworks: Bool = false
@@ -237,20 +231,12 @@ open class ExtensionProvider: NEPacketTunnelProvider {
             throw ExtensionStartupError("(packet-tunnel) error: missing configContent in tunnel options")
         }
 
-        #if os(iOS)
-            do {
-                try await startVeyloEngine(configContent)
-            } catch {
-                throw ExtensionStartupError("(packet-tunnel) error: start service: \(error.localizedDescription)")
-            }
-        #else
-            let options = LibboxOverrideOptions()
-            do {
-                try commandServer!.startOrReloadService(configContent, options: options)
-            } catch {
-                throw ExtensionStartupError("(packet-tunnel) error: start service: \(error.localizedDescription)")
-            }
-        #endif
+        let options = LibboxOverrideOptions()
+        do {
+            try commandServer!.startOrReloadService(configContent, options: options)
+        } catch {
+            throw ExtensionStartupError("(packet-tunnel) error: start service: \(error.localizedDescription)")
+        }
         #if os(macOS)
             if !Variant.useSystemExtension, commandServer!.needWIFIState() {
                 locationManager = CLLocationManager()
@@ -274,11 +260,6 @@ open class ExtensionProvider: NEPacketTunnelProvider {
     #endif
 
     func stopService() {
-        #if os(iOS)
-            veyloReading = false
-            veyloTunnel?.close()
-            veyloTunnel = nil
-        #endif
         do {
             try commandServer?.closeService()
         } catch {
@@ -348,115 +329,4 @@ open class ExtensionProvider: NEPacketTunnelProvider {
             commandServer.wake()
         }
     }
-
-    #if os(iOS)
-        private func startVeyloEngine(_ configContent: String) async throws {
-            veyloReading = false
-            veyloTunnel?.close()
-            var translateError: NSError?
-            let engineJSON = MobileConfigFromSingbox(configContent, &translateError)
-            if let translateError {
-                throw translateError
-            }
-            try await applyVeyloSettings()
-            let platform = VeyloIOSPlatform(owner: self)
-            let tunnel = try VeyloBound(configJSON: engineJSON, platform: platform)
-            try tunnel.start()
-            veyloTunnel = tunnel
-            veyloReading = true
-            readVeyloPackets()
-        }
-
-        private func applyVeyloSettings() async throws {
-            let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-            settings.mtu = 1500
-            let dns = NEDNSSettings(servers: ["172.19.0.2"])
-            dns.matchDomains = [""]
-            settings.dnsSettings = dns
-            let ipv4 = NEIPv4Settings(addresses: ["172.19.0.1"], subnetMasks: ["255.255.255.252"])
-            ipv4.includedRoutes = [NEIPv4Route.default()]
-            settings.ipv4Settings = ipv4
-            let ipv6 = NEIPv6Settings(addresses: ["fdfe:dcba:9876::1"], networkPrefixLengths: [126])
-            ipv6.includedRoutes = [NEIPv6Route.default()]
-            settings.ipv6Settings = ipv6
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                setTunnelNetworkSettings(settings) { error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
-                    }
-                }
-            }
-        }
-
-        private func readVeyloPackets() {
-            packetFlow.readPackets { [weak self] packets, _ in
-                guard let self, self.veyloReading, let tunnel = self.veyloTunnel else { return }
-                for packet in packets {
-                    tunnel.input(packet)
-                }
-                self.readVeyloPackets()
-            }
-        }
-
-        fileprivate func writeVeyloPacket(_ packet: Data) {
-            let version = packet.first ?? 0
-            let family: Int32 = version >> 4 == 6 ? AF_INET6 : AF_INET
-            packetFlow.writePackets([packet], withProtocols: [NSNumber(value: family)])
-        }
-    #endif
 }
-
-#if os(iOS)
-    private final class VeyloBound {
-        private let engine: MobileEngine
-        private let platform: VeyloIOSPlatform
-
-        init(configJSON: String, platform: VeyloIOSPlatform) throws {
-            self.platform = platform
-            var error: NSError?
-            guard let created = MobileNewEngine(configJSON, platform, &error) else {
-                throw error ?? ExtensionStartupError("(packet-tunnel) error: engine was not created")
-            }
-            engine = created
-        }
-
-        func start() throws {
-            try engine.start()
-        }
-
-        func close() {
-            try? engine.close()
-        }
-
-        func input(_ packet: Data) {
-            try? engine.inputPacket(packet)
-        }
-    }
-
-    private final class VeyloIOSPlatform: NSObject, MobilePlatformProtocol {
-        weak var owner: ExtensionProvider?
-
-        init(owner: ExtensionProvider) {
-            self.owner = owner
-        }
-
-        func openTun(_ optionsJSON: String?, ret0_ ret0_: UnsafeMutablePointer<Int32>?) throws {
-            ret0_?.pointee = 0
-        }
-
-        func protect(_ fd: Int32) throws {}
-
-        func log(_ level: Int32, line: String?) {
-            NSLog("veylo [%d] %@", level, line ?? "")
-        }
-
-        func usePacketFlow() -> Bool { true }
-
-        func writePacket(_ packet: Data?) throws {
-            guard let packet, !packet.isEmpty else { return }
-            owner?.writeVeyloPacket(packet)
-        }
-    }
-#endif
