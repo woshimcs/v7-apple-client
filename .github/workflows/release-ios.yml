@@ -70,7 +70,7 @@ jobs:
           go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
           export PATH="$(go env GOPATH)/bin:$PATH"
           gomobile init
-          git clone --depth 1 --branch veylo-1.0.1 https://github.com/woshimcs/veylo-core.git sing-box-src
+          git -c credential.helper= clone --depth 1 --branch veylo-1.0.1 https://github.com/woshimcs/veylo-core.git sing-box-src
           sh sing-box-src/release/fetch-deps.sh
           (
             cd sing-box-src
