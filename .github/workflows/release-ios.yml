@@ -2,6 +2,13 @@
 # Libbox 用 Veylo 隧道核：sing-box-lx（官方 sing-box + xhttp）。导出格式对齐现网 1.12+。
 # 直接在本仓跑需要 APPLE_API_* secrets。桌面仓 v7-win-pc 已有这三把钥匙，
 # 用 workflow_call 把它们传进来，避免把密钥再复制一份。
+#
+# 版本（1.1.0 起，对齐 v7 线语义化版本）：
+#   - MARKETING_VERSION = inputs.version，必须是 X.Y.Z 且等于 ApplicationLibrary/V7/V7Version.swift。
+#   - CURRENT_PROJECT_VERSION = UTC 时间 YYYYMMDDHHMM：不管从哪个仓、哪个 workflow 触发都单调递增
+#     （以前用 github.run_number，被 v7-win-pc 调用时是调用方的计数，直接在本仓跑会倒退）。
+# 安全：要编的提交必须在 feat/ios-testflight 上（已合并的代码），否则拒绝——
+#   App Store Connect 钥匙会落盘给 xcodebuild 用，任意分支上的构建脚本都能读到它。确需例外勾 allow_unmerged。
 name: release-ios
 
 on:
@@ -10,20 +17,29 @@ on:
       version:
         description: "MARKETING_VERSION，与 V7Version.marketing 一致"
         required: false
-        default: "1.0.2"
+        default: "1.1.0"
       git_ref:
         description: "要编的 v7-apple-client ref，留空=当前提交"
         required: false
         default: ""
+      allow_unmerged:
+        description: "允许编不在 feat/ios-testflight 上的提交（会把签名钥匙交给这份代码）"
+        type: boolean
+        required: false
+        default: false
   workflow_call:
     inputs:
       version:
         type: string
         required: false
-        default: "1.0.2"
+        default: "1.1.0"
       git_ref:
         type: string
         required: true
+      allow_unmerged:
+        type: boolean
+        required: false
+        default: false
     secrets:
       APPLE_API_KEY_ID:
         required: true
@@ -37,7 +53,8 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 120
     env:
-      VERSION: ${{ inputs.version || '1.0.0' }}
+      VERSION: ${{ inputs.version || '1.1.0' }}
+      RELEASE_BRANCH: feat/ios-testflight
       TEAM_ID: "4534A24396"
       BUNDLE_ID: link.veylo.ios
     steps:
@@ -47,6 +64,31 @@ jobs:
           repository: woshimcs/v7-apple-client
           ref: ${{ inputs.git_ref != '' && inputs.git_ref || github.sha }}
           submodules: recursive
+          fetch-depth: 0
+
+      - name: Guard version and ref
+        env:
+          ALLOW_UNMERGED: ${{ inputs.allow_unmerged && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::version 必须是 X.Y.Z，收到 '$VERSION'"; exit 1
+          fi
+          repo_version="$(sed -n 's/.*marketing = "\(.*\)".*/\1/p' ApplicationLibrary/V7/V7Version.swift)"
+          if [ "$repo_version" != "$VERSION" ]; then
+            echo "::error::V7Version.marketing=$repo_version 与输入 $VERSION 不一致"; exit 1
+          fi
+          head="$(git rev-parse HEAD)"
+          git fetch --no-tags origin "$RELEASE_BRANCH"
+          if git merge-base --is-ancestor "$head" FETCH_HEAD; then
+            echo "$head 在 $RELEASE_BRANCH 上"
+          elif [ "$ALLOW_UNMERGED" = "true" ]; then
+            echo "::warning::$head 不在 $RELEASE_BRANCH 上（allow_unmerged）"
+          else
+            echo "::error::$head 不在 $RELEASE_BRANCH 上。先合并再发 TestFlight，或显式勾 allow_unmerged。"; exit 1
+          fi
+          echo "BUILD_NUMBER=$(date -u +%Y%m%d%H%M)" >> "$GITHUB_ENV"
+          echo "SOURCE_SHA=$head" >> "$GITHUB_ENV"
 
       - name: Select Xcode 26
         run: |
@@ -60,6 +102,12 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: "1.25.5"
+
+      - name: Traffic ledger unit tests
+        run: |
+          set -euo pipefail
+          cd V7Tests/TrafficLedger
+          swift test
 
       - name: Build Libbox.xcframework (veylo-core, iOS)
         run: |
@@ -199,7 +247,7 @@ jobs:
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE=Automatic \
             MARKETING_VERSION="$VERSION" \
-            CURRENT_PROJECT_VERSION="${{ github.run_number }}" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             V7_API_BASE="https://veylo.link" \
             | xcbeautify
 
@@ -215,3 +263,11 @@ jobs:
             -authenticationKeyID "$API_KEY_ID" \
             -authenticationKeyIssuerID "$API_ISSUER" \
             | xcbeautify
+
+      - name: Summary
+        run: |
+          {
+            echo "### Veylo iOS → TestFlight"
+            echo "- version: \`$VERSION\` (build \`$BUILD_NUMBER\`)"
+            echo "- source: \`woshimcs/v7-apple-client@$SOURCE_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,4 +1,5 @@
 import Foundation
+import Library
 
 // MARK: - DTOs（对齐 collections 后端 snake_case；见 docs/BACKEND_INTEGRATION.md）
 
@@ -60,6 +61,23 @@ public struct V7Session: Decodable {
     public let vpn_access: V7VpnAccess
     public let subscriptions: [V7Subscription]
     public let client_actions: [String]
+    /// CF-23：服务端挑好的最紧张团队额度。旧服务端没有这个字段；格式不对也不影响会话。
+    public let traffic_quota: V7SessionQuota?
+
+    private enum CodingKeys: String, CodingKey {
+        case revision, server_time, account, vpn_access, subscriptions, client_actions, traffic_quota
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        revision = try c.decode(String.self, forKey: .revision)
+        server_time = try c.decodeIfPresent(String.self, forKey: .server_time)
+        account = try c.decode(V7Account.self, forKey: .account)
+        vpn_access = try c.decode(V7VpnAccess.self, forKey: .vpn_access)
+        subscriptions = try c.decode([V7Subscription].self, forKey: .subscriptions)
+        client_actions = try c.decode([String].self, forKey: .client_actions)
+        traffic_quota = (try? c.decodeIfPresent(V7SessionQuota.self, forKey: .traffic_quota)) ?? nil
+    }
 }
 
 /// client_actions 枚举（与 meEntitlementService.computeClientActions 对齐）。
@@ -135,6 +153,18 @@ public enum V7Api {
         return payload.clients?.first { $0.platform == "ios" }
     }
 
+    /// CF-23：本计费周期每个团队的额度。404 = 服务端还没有这个功能。
+    public static func trafficSummary() async throws -> V7TrafficSummary {
+        let (value, _, _): (V7TrafficSummary, String?, Bool) = try await V7Backend.get("/api/v1/me/traffic/summary")
+        return value
+    }
+
+    /// CF-21：上传一批用量。返回 HTTP 状态码，网络失败为 0。带 x-hwid（服务端按设备记账）。
+    public static func uploadTraffic(_ batch: V7TrafficBatch.Upload) async -> Int {
+        guard let body = try? JSONEncoder().encode(batch) else { return 400 }
+        return await V7Backend.postStatus("/api/v1/me/traffic", bodyData: body, headers: ["x-hwid": V7Keychain.hwid()])
+    }
+
     public static func plans() async throws -> [V7Plan] {
         let (rows, _, _): ([V7Plan], String?, Bool) = try await V7Backend.get("/api/v1/billing/me/visible-plans")
         return rows
@@ -197,10 +227,57 @@ public struct V7LineMeta: Decodable {
     public let cores: [String]?
     public let best_core: String?
     public let stealth_primary: Bool?
+    /// CF-23：线路 id，上报时带上，服务端按它记账（对不上按 line_tag 兜底）。
+    public let route_id: Int?
+    /// 隐身分组的备用成员，各有自己的 route_id。
+    public let fallbacks: [V7LineFallback]?
+    /// CF-20：近 24 小时可用率。旧服务端没有；样本不足时为 null。
+    public let uptime: V7LineUptime?
+
+    private enum CodingKeys: String, CodingKey {
+        case name, region_name, region_emoji, singbox_ok, cores, best_core, stealth_primary, route_id, fallbacks, uptime
+    }
+
+    /// 逐字段宽松解析：新加的字段格式不对时只丢这个字段，不让整张线路表失败。
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? nil
+        region_name = (try? c.decodeIfPresent(String.self, forKey: .region_name)) ?? nil
+        region_emoji = (try? c.decodeIfPresent(String.self, forKey: .region_emoji)) ?? nil
+        singbox_ok = (try? c.decodeIfPresent(Bool.self, forKey: .singbox_ok)) ?? nil
+        cores = (try? c.decodeIfPresent([String].self, forKey: .cores)) ?? nil
+        best_core = (try? c.decodeIfPresent(String.self, forKey: .best_core)) ?? nil
+        stealth_primary = (try? c.decodeIfPresent(Bool.self, forKey: .stealth_primary)) ?? nil
+        route_id = (try? c.decodeIfPresent(Int.self, forKey: .route_id)) ?? nil
+        fallbacks = (try? c.decodeIfPresent([V7LineFallback].self, forKey: .fallbacks)) ?? nil
+        uptime = (try? c.decodeIfPresent(V7LineUptime.self, forKey: .uptime)) ?? nil
+    }
+}
+
+public struct V7LineFallback: Decodable {
+    public let name: String?
+    public let route_id: Int?
+}
+
+/// /lines 的 uptime（veylo-api route_uptime）。
+public struct V7LineUptime: Decodable, Hashable {
+    public let pct: Double
+    public let window_hours: Int
+    public let samples: Int
+    public let bars: [Int]
+
+    /// 与桌面 lineUptimeView 同一规则：样本不足或字段不对时不展示，避免把一次成功画成 100%。
+    public var displayText: String? {
+        guard window_hours == 24, pct.isFinite, pct >= 0, pct <= 100, samples >= 3 else { return nil }
+        guard (1 ... 48).contains(bars.count), bars.allSatisfy({ $0 == 0 || $0 == 1 }) else { return nil }
+        return String(format: "%.2f%%", pct)
+    }
 }
 
 public struct V7MePayload: Decodable { public let user: V7User? }
 public struct V7User: Decodable {
+    /// 用户 id（uuid）。用量批次的 owner 用它，避免换号后串账。
+    public let id: String?
     public let username: String?
     public let role: String?
     public let email: String?
@@ -208,6 +285,22 @@ public struct V7User: Decodable {
     public let vpn_enabled: Bool?
     public let tier_name: String?
     public let tier_code: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, username, role, email, created_at, vpn_enabled, tier_name, tier_code
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = V7Notice.flexID(c, key: .id)
+        username = try c.decodeIfPresent(String.self, forKey: .username)
+        role = try c.decodeIfPresent(String.self, forKey: .role)
+        email = try c.decodeIfPresent(String.self, forKey: .email)
+        created_at = try c.decodeIfPresent(String.self, forKey: .created_at)
+        vpn_enabled = try c.decodeIfPresent(Bool.self, forKey: .vpn_enabled)
+        tier_name = try c.decodeIfPresent(String.self, forKey: .tier_name)
+        tier_code = try c.decodeIfPresent(String.self, forKey: .tier_code)
+    }
 }
 
 public struct V7Notice: Decodable, Identifiable {

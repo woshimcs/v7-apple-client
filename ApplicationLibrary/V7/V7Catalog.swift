@@ -2,9 +2,17 @@ import Foundation
 
 /// 对齐安卓 V7SubscriptionRepo：拉全部有效订阅，下载 sing-box 导出，再按线路名 join /lines。
 public enum V7Catalog {
-    public static func sync(fallback: [V7Subscription]) async throws -> (lines: [V7ConfigBuilder.Line], proxy: [String: Any]) {
+    public struct Result {
+        public var lines: [V7ConfigBuilder.Line]
+        public var proxy: [String: Any]
+        /// 订阅 id → (线路名 → route_id)，含隐身分组的备用成员。上报用量时带 route_id（CF-23）。
+        public var routeIds: [Int: [String: Int]]
+    }
+
+    public static func sync(fallback: [V7Subscription]) async throws -> Result {
         let subs = await activeSubscriptions(fallback: fallback)
         var lines: [V7ConfigBuilder.Line] = []
+        var routeIds: [Int: [String: Int]] = [:]
         for sub in subs {
             let singURL = sub.export_links?.singbox ?? ""
             let xrayURL = sub.export_links?.xray ?? ""
@@ -17,10 +25,24 @@ public enum V7Catalog {
                 parsed = V7ConfigBuilder.lines(in: export, subscriptionId: sub.id, subscriptionName: name, exportURL: singURL, xrayExportURL: xrayURL)
             }
             let meta = (try? await V7Api.subscriptionLines(sub.id)) ?? []
+            routeIds[sub.id] = routeMap(meta)
             lines.append(contentsOf: join(parsed, meta: meta, subscriptionId: sub.id, subscriptionName: name, xrayExportURL: xrayURL))
         }
         let proxy = (try? await V7Api.proxyConfig()) ?? [:]
-        return (lines, proxy)
+        return Result(lines: lines, proxy: proxy, routeIds: routeIds)
+    }
+
+    /// 对齐桌面 attachRouteIds：先主线路，再隐身分组的备用成员；同名取第一个，非正数不要。
+    static func routeMap(_ meta: [V7LineMeta]) -> [String: Int] {
+        var out: [String: Int] = [:]
+        func take(_ name: String?, _ id: Int?) {
+            let key = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, out[key] == nil, let id, id > 0 else { return }
+            out[key] = id
+        }
+        for item in meta { take(item.name, item.route_id) }
+        for item in meta { for fb in item.fallbacks ?? [] { take(fb.name, fb.route_id) } }
+        return out
     }
 
     private static func activeSubscriptions(fallback: [V7Subscription]) async -> [V7MySubscription] {
@@ -82,6 +104,7 @@ public enum V7Catalog {
                     core: choice.core
                 )
                 line.region = regionText(item)
+                line.uptime = item.uptime
                 visible.append(line)
             }
         }
@@ -99,6 +122,7 @@ public enum V7Catalog {
         copy.singboxOK = item.singbox_ok
         copy.core = choice.core
         copy.singboxRunnable = choice.runnable && !line.exportURL.isEmpty
+        copy.uptime = item.uptime
         return copy
     }
 

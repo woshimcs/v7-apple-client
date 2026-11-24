@@ -4,6 +4,8 @@ import SwiftUI
 /// 登录后的 Veylo 壳，对齐安卓简化首页：状态、当前线路、连接 / 断开、我的。
 public struct V7HomeView: View {
     @EnvironmentObject private var state: V7AppState
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @State private var tab = 0
 
     public init() {}
@@ -25,6 +27,85 @@ public struct V7HomeView: View {
             if state.lines.isEmpty {
                 await state.syncCatalog()
             }
+        }
+        // 回前台：刷新会话 / 额度，上传扩展在后台攒的用量（CF-21 / CF-23）。
+        .onChangeCompat(of: scenePhase) { phase in
+            if phase == .active {
+                Task { await state.onForeground() }
+            }
+        }
+        .alert(item: $state.quotaPrompt) { q in
+            Alert(
+                title: Text(q.state == .exceeded ? "本周期流量已用完" : "本周期流量快用完了"),
+                message: Text(quotaPromptBody(q)),
+                primaryButton: .default(Text("购买流量包")) {
+                    if let url = state.quotaPurchaseURL { openURL(url) }
+                },
+                secondaryButton: .cancel(Text("知道了"))
+            )
+        }
+    }
+
+    private func quotaPromptBody(_ q: V7QuotaView) -> String {
+        var parts = [q.usageText]
+        if !q.orgName.isEmpty { parts.insert("团队：\(q.orgName)", at: 0) }
+        parts.append(q.state == .exceeded ? "连接不会断开。买一个流量包可以继续按额度使用。" : "可以提前买一个流量包。")
+        return parts.joined(separator: "\n")
+    }
+}
+
+/// 首页 / 我的 共用的额度条：已用 / 总量、剩余、购买入口（CF-23）。
+struct V7QuotaCard: View {
+    @EnvironmentObject private var state: V7AppState
+    @Environment(\.openURL) private var openURL
+    let quota: V7QuotaView
+    var compact = false
+
+    private var tint: Color {
+        switch quota.state {
+        case .exceeded: return .red
+        case .near: return .orange
+        default: return .accentColor
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("本周期流量").font(.caption).foregroundStyle(.secondary)
+                if !quota.orgName.isEmpty {
+                    Text(quota.orgName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer()
+                if let end = quota.periodEndText {
+                    Text(end).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text(quota.usageText).font(.subheadline.bold())
+            if let ratio = quota.usedRatio {
+                ProgressView(value: ratio).tint(tint)
+            }
+            HStack {
+                if let warning = quota.stateText {
+                    Text(warning).font(.caption).foregroundStyle(tint)
+                } else if let remaining = quota.remainingText {
+                    Text(remaining).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !compact {
+                    Button("流量明细") {
+                        if let url = state.quotaDetailURL { openURL(url) }
+                    }
+                    .font(.caption)
+                }
+                if quota.state != .unlimited {
+                    Button("购买流量包") {
+                        if let url = state.quotaPurchaseURL { openURL(url) }
+                    }
+                    .font(.caption.bold())
+                }
+            }
+            .buttonStyle(.borderless)
         }
     }
 }
@@ -93,6 +174,24 @@ private struct V7ConnectPage: View {
             .padding(.horizontal, 24)
             .padding(.top, 32)
 
+            if state.upgradeRequired {
+                Text("当前版本过旧，暂时不能连接。请到 TestFlight 或 App Store 更新 Veylo。")
+                    .font(.footnote)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 12)
+            }
+
+            if let quota = state.quota {
+                V7QuotaCard(quota: quota, compact: true)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 14)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal, 24)
+                    .padding(.top, 12)
+            }
+
             if let err = state.lastError {
                 Text(err)
                     .font(.footnote)
@@ -122,7 +221,7 @@ private struct V7ConnectPage: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(connected ? .green : .accentColor)
-            .disabled(state.connecting && state.vpnStatus == .invalid)
+            .disabled((state.connecting && state.vpnStatus == .invalid) || (state.upgradeRequired && !connected && !connecting))
             .padding(.horizontal, 24)
             .padding(.bottom, 16)
         }
@@ -303,6 +402,16 @@ private struct V7LinePicker: View {
                     .foregroundStyle(line.veyloRunnable ? Color.primary : Color.secondary)
                     .multilineTextAlignment(.leading)
                 Spacer(minLength: 12)
+                if let uptime = line.uptime?.displayText {
+                    // CF-20：近 24 小时可用率，样本不足不显示。
+                    Text(uptime)
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(Color.green)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.green.opacity(0.15), in: Capsule())
+                        .accessibilityLabel("近 24 小时可用率 \(uptime)")
+                }
                 if selected {
                     Image(systemName: "checkmark")
                         .font(.body.weight(.semibold))
