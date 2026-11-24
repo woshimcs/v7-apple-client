@@ -125,6 +125,33 @@ public enum V7Backend {
         }
     }
 
+    /// POST 并只返回 HTTP 状态码；网络失败返回 0。流量上报用（结果按状态码分流，见 V7TrafficUploadOutcome）。
+    public static func postStatus(_ path: String, bodyData: Data, headers: [String: String] = [:], timeout: TimeInterval = 10) async -> Int {
+        guard let url = try? makeURL(path) else { return 0 }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = timeout
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let token = V7Keychain.token() {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        for (k, v) in headers where !v.isEmpty {
+            req.setValue(v, forHTTPHeaderField: k)
+        }
+        req.httpBody = bodyData
+        // 不等网络恢复：上报失败留在队列里，下次再传。
+        guard let result = try? await uploadSession.data(for: req) else { return 0 }
+        return (result.1 as? HTTPURLResponse)?.statusCode ?? 0
+    }
+
+    private static let uploadSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 10
+        cfg.waitsForConnectivity = false
+        return URLSession(configuration: cfg)
+    }()
+
     /// envelope.data 为 JSON 对象时原样返回（proxy-config）。
     public static func getObject(_ path: String) async throws -> [String: Any] {
         guard let url = try makeURL(path) else { throw V7Error.notConfigured }

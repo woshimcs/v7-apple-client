@@ -24,10 +24,12 @@
 | 14 | `Library/Network/ExtensionPlatformInterface.swift` | `cancelNotification` / `usePlatformBridge` / `createBridge` | 补上 sing-box v1.14.0 的平台接口。iOS 上 bridge 直接拒绝，通知取消走系统通知中心。 | 2026-10-06 | feat/ios-testflight |
 | 15 | `ApplicationLibrary/Views/Tools/ReportShared.swift` | `LibboxCreateZipArchive` | v1.14.0 多了 `encrypt` 参数。测试包报告不加密，传 `false`。 | 2026-10-06 | feat/ios-testflight |
 | 16 | `Library/Network/CommandClient.swift` | `clientHandler.write(_: LibboxDnsQuery)` | veylo-core 的命令协议多了 DNS 查询回调，Swift 名是 `write(_:)`。空实现，不影响连接。 | 2026-10-06 | feat/ios-testflight |
+| 17 | `Extension/PacketTunnelProvider.swift` | `startTunnel` / `stopTunnel` / `handleAppMessage` 覆写 | 隧道起来后启动 Veylo 用量采样，停止前封最后一批，reload 后换线路目录（CF-21，见 `docs/TRAFFIC_ACCOUNTING_IOS.md`）。都在 `super` 前后调用，不改隧道逻辑。 | 2026-11-24 | feat/ios-1.1.0-traffic |
 
 > 新增 V7 自有文件（不动上游，不入上表）：
 > - `V7/V7About.swift`（GPL 关于页草稿，PR `feat/branding-veylo`）。
 > - `ApplicationLibrary/V7/`（登录、session、1.12+ 配置、profile 桥）。由同步目录编进 ApplicationLibrary。
+> - `Library/V7/V7TrafficLedger.swift`（用量累加 / App Group 队列，纯 Foundation；主 App 与扩展共用）、`Extension/V7TrafficSampler.swift`（扩展内采样）。单测在 `V7Tests/TrafficLedger`（独立 SwiftPM 包，不进 Xcode 工程）。
 > - `.github/workflows/release-ios.yml`（TestFlight CI，`macos-26` + Xcode 26，Libbox 取 `woshimcs/veylo-core` 标签 `veylo-1.0.0`）。
 >
 > 登录闸门、`V7_API_BASE`、entitlements 已落在上表 #7–#13。登录后是 Veylo 壳（首页 / 工具 / 我的），不再进上游 `MainView`。

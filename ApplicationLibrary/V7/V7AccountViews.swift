@@ -57,6 +57,12 @@ public struct V7MePage: View {
                     row("注册", state.profile?.created_at ?? "—")
                     row("加速", state.vpnAccessAllowed ? "已开通" : "未开通")
                 }
+                if let quota = state.quota {
+                    Section("流量") {
+                        V7QuotaCard(quota: quota)
+                            .padding(.vertical, 4)
+                    }
+                }
                 Section("连接") {
                     Toggle("自动切换线路", isOn: Binding(
                         get: { state.autoLineSwitch },
@@ -88,7 +94,10 @@ public struct V7MePage: View {
                 }
             }
             .navigationTitle("我的")
-            .task { await state.loadAccount() }
+            .task {
+                await state.loadAccount()
+                await state.refreshQuota(force: false)
+            }
         }
         .navigationViewStyle(.stack)
     }

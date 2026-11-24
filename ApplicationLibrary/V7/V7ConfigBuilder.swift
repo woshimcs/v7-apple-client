@@ -104,6 +104,8 @@ public enum V7ConfigBuilder {
         public var veyloRunnable: Bool { singboxRunnable || !xrayExportURL.isEmpty }
         /// 这条线路实际该用的内核：singbox / xray / mihomo。
         public var core: String
+        /// CF-20：/lines 的近 24 小时可用率；旧服务端或样本不足为 nil。
+        public var uptime: V7LineUptime? = nil
         public var id: String { "\(subscriptionId)|\(tag)" }
         public var coreLabel: String {
             switch core {

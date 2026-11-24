@@ -30,6 +30,16 @@ public final class V7AppState: ObservableObject {
     @Published public private(set) var notices: [V7Notice] = []
     @Published public var autoLineSwitch: Bool
     @Published public private(set) var bypass = V7ConfigBuilder.BypassRules()
+    /// CF-23：本周期额度（最紧张的团队）。服务端不支持或还没拉到时为 nil。
+    @Published public private(set) var quota: V7QuotaView?
+    /// 待弹出的超额 / 接近超额提示（同一账户、团队、周期、状态只弹一次）。
+    @Published public var quotaPrompt: V7QuotaView?
+    @Published public private(set) var quotaPurchasePath: String?
+    /// 线路 route_id，按订阅分。连接时写给扩展，用量样本带上（CF-23）。
+    private var routeIds: [Int: [String: Int]] = [:]
+    private var quotaSupported = true
+    private var lastSummaryAt: Date?
+    private var uploadTask: Task<Void, Never>?
 
     private var sessionEtag: String?
     private var pollTask: Task<Void, Never>?
@@ -69,13 +79,21 @@ public final class V7AppState: ObservableObject {
 
     public func logout() async {
         pollTask?.cancel(); pollTask = nil
+        uploadTask?.cancel(); uploadTask = nil
         try? await V7ProfileBridge.stop()
+        // 不等上传（桌面 1.0.81 教训）。已封的批次留在 App Group，同一账户再登录时传。
+        V7TrafficReporter.clearOwner()
         await V7Api.logout()
         session = nil
         sessionEtag = nil
         lines = []
+        routeIds = [:]
         profile = nil
         notices = []
+        quota = nil
+        quotaPrompt = nil
+        quotaSupported = true
+        lastSummaryAt = nil
         vpnAccessAllowed = false
         username = nil
         UserDefaults.standard.removeObject(forKey: userKey)
@@ -91,13 +109,16 @@ public final class V7AppState: ObservableObject {
             let (s, etag) = try await V7Api.session(full: full, etag: full ? nil : sessionEtag)
             sessionEtag = etag ?? sessionEtag
             let resync = await apply(session: s)
+            applySessionQuota(s.traffic_quota)
             if full || resync {
                 await syncCatalog()
             }
             if full {
                 await loadAccount()
                 await V7Api.heartbeat()
+                await refreshQuota(force: true)
             }
+            uploadTraffic()
         } catch is V7NotModified {
             // 未变化，保留旧 session
         } catch let V7Backend.V7Error.http(code, _) where code == 401 {
@@ -114,6 +135,10 @@ public final class V7AppState: ObservableObject {
         vpnAccessAllowed = s.vpn_access.allowed
         denyReason = s.vpn_access.deny_reason
         upgradeRequired = Self.isOutdated(local: Self.appVersion(), min: s.account.min_supported_version)
+        if upgradeRequired {
+            // CF-05：过旧版本不能用。断开并锁住连接，界面引导去 TestFlight / App Store 更新。
+            try? await V7ProfileBridge.stop()
+        }
 
         let actions = Set(s.client_actions.compactMap { V7ClientAction(rawValue: $0) })
         if actions.contains(.lockVpnUi) {
@@ -133,7 +158,7 @@ public final class V7AppState: ObservableObject {
         return actions.contains(.refreshNodes)
     }
 
-    /// 后台轮询：按 next_poll_after_sec（缺省 1800s）拉 minimal。
+    /// 后台轮询：按 next_poll_after_sec（缺省 1800s）拉 minimal。另起一个 2 分钟的上传循环（App 在前台时才会跑）。
     public func startPolling() {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
@@ -144,7 +169,82 @@ public final class V7AppState: ObservableObject {
                 await self.refresh(full: false)
             }
         }
+        uploadTask?.cancel()
+        uploadTask = Task { [weak self] in
+            while let self, !Task.isCancelled, await self.isLoggedIn {
+                try? await Task.sleep(nanoseconds: 120 * NSEC_PER_SEC)
+                if Task.isCancelled { break }
+                await self.uploadTraffic()
+            }
+        }
     }
+
+    /// 回到前台：轻量刷新会话、额度，上传扩展在后台攒下的用量。
+    public func onForeground() async {
+        guard isLoggedIn else { return }
+        await bindTunnel()
+        uploadTraffic()
+        await refresh(full: false)
+        await refreshQuota(force: false)
+    }
+
+    // MARK: - 用量上报（CF-21）
+
+    private var ownerKey: String? {
+        if let id = profile?.id, !id.isEmpty { return "id:\(id)" }
+        if let name = profile?.username ?? username, !name.isEmpty { return "name:\(name)" }
+        return nil
+    }
+
+    private var ownerKeys: [String] {
+        V7TrafficOwner.keys(userId: profile?.id, username: profile?.username ?? username)
+    }
+
+    /// 不等结果。隧道没在跑时顺带封掉扩展遗留的 open.json。
+    public func uploadTraffic() {
+        guard isLoggedIn else { return }
+        let idle = vpnStatus == .disconnected || vpnStatus == .invalid
+        V7TrafficReporter.uploadInBackground(ownerKeys: ownerKeys, tunnelIdle: idle)
+    }
+
+    // MARK: - 额度（CF-23）
+
+    /// GET /me/traffic/summary，节流 60 秒。失败不抛；404 表示服务端还没有额度功能，不再显示。
+    public func refreshQuota(force: Bool) async {
+        guard isLoggedIn, quotaSupported else { return }
+        if !force, let last = lastSummaryAt, Date().timeIntervalSince(last) < 60 { return }
+        lastSummaryAt = Date()
+        do {
+            let summary = try await V7Api.trafficSummary()
+            quotaPurchasePath = V7Quota.safePath(summary.purchase_path)
+            let rows = (summary.orgs ?? []).map { V7QuotaView($0) }
+            setQuota(V7Quota.tightest(rows))
+        } catch let V7Backend.V7Error.http(code, _) where code == 404 {
+            quotaSupported = false
+            quota = nil
+        } catch {
+            // 网络问题：保留上次的数字
+        }
+    }
+
+    private func applySessionQuota(_ q: V7SessionQuota?) {
+        guard let q, quotaSupported else { return }
+        quotaPurchasePath = V7Quota.safePath(q.purchase_path)
+        let name = quota?.orgId == q.org_id ? (quota?.orgName ?? "") : ""
+        setQuota(V7QuotaView(q, orgName: name))
+    }
+
+    private func setQuota(_ q: V7QuotaView?) {
+        quota = q
+        guard let q else { return }
+        let uid = profile?.id ?? username ?? ""
+        if V7Quota.shouldPrompt(userId: uid, q) {
+            quotaPrompt = q
+        }
+    }
+
+    public var quotaPurchaseURL: URL? { V7Quota.purchaseURL(path: quotaPurchasePath) }
+    public var quotaDetailURL: URL? { V7Quota.detailURL() }
 
     // MARK: - 连接编排
 
@@ -155,6 +255,7 @@ public final class V7AppState: ObservableObject {
             let wasConnected = vpnStatus == .connected || vpnStatus == .connecting
             let previous = selectedLineId
             lines = result.lines
+            routeIds = result.routeIds
             bypass = V7ConfigBuilder.BypassRules.from(result.proxy)
             if let previous, lines.contains(where: { $0.id == previous }) {
                 setSelected(previous)
@@ -179,6 +280,7 @@ public final class V7AppState: ObservableObject {
                 username = name
                 UserDefaults.standard.set(name, forKey: userKey)
             }
+            V7TrafficReporter.writeMeta(owner: ownerKey, preferredTag: nil, collectionId: nil, routeIds: nil)
         }
         notices = (try? await V7Api.notices()) ?? notices
     }
@@ -205,6 +307,10 @@ public final class V7AppState: ObservableObject {
             lastError = denyReason ?? "当前不可连接"
             return
         }
+        guard !upgradeRequired else {
+            lastError = "当前版本过旧，请先更新 Veylo。"
+            return
+        }
         if lines.isEmpty {
             await syncCatalog()
         }
@@ -214,6 +320,13 @@ public final class V7AppState: ObservableObject {
         }
         connecting = true
         defer { connecting = false }
+        // 扩展按这份上下文给用量样本打标签（账户、route_id、订阅 id）。写一个小文件，不联网。
+        V7TrafficReporter.writeMeta(
+            owner: ownerKey,
+            preferredTag: line.tag,
+            collectionId: line.subscriptionId,
+            routeIds: routeIds[line.subscriptionId] ?? [:]
+        )
         do {
             if line.singboxRunnable, !line.exportURL.isEmpty {
                 let runnableTags = Set(lines.filter { $0.subscriptionId == line.subscriptionId && $0.singboxRunnable }.map(\.tag))
@@ -235,15 +348,18 @@ public final class V7AppState: ObservableObject {
                 return
             }
             await bindTunnel()
+            uploadTraffic()
         } catch {
             lastError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 
+    /// 断开不等上传；扩展停止时自己封最后一批，下次上传带走。
     public func disconnect() async {
         connecting = false
         try? await V7ProfileBridge.stop()
         await bindTunnel()
+        uploadTraffic()
     }
 
     public func bindTunnel() async {
